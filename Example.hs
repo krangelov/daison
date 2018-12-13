@@ -1,5 +1,5 @@
 {-# LANGUAGE MonadComprehensions #-}
-import Selda
+import Database.Helda
 import System.Environment
 
 people_name :: Index (String,Int) String
@@ -14,8 +14,8 @@ main = do
   x <- runSelda db ReadWriteMode $ do
          --dropTable people
          tryCreateTable people
-         --insert people ("Aga",15)
-         --insert people ("Henry",22)
+         insert people ("Aga",15)
+         insert people ("Henry",22)
          --update people2 (\_ (name,age,x) -> (name,age,10))
            --             (from people2)
          select [x | x <- from people]
