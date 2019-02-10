@@ -19,36 +19,42 @@ tag_float    = Tag  0b01111 5 "a float"
 tag_double   = Tag  0b10111 5 "a double"
 tag_rational = Tag  0b11111 5 "a rational"
 tag_char     = Tag 0b100111 6 "a char"
+tag_int_list = Tag 0b101111 6 "an integer list"
+tag_flt_list = Tag 0b110111 6 "a list of floats"
+tag_dbl_list = Tag 0b111111 6 "a list of doubles"
 
 serialize :: Data a => a -> ByteString
 serialize = runPut . serializeM
 
 serializeM :: Data a => a -> Put
 serializeM =
-  serializeDefault `extQ`
---  serializeList `extQ`
-  serializeString `extQ`
+  serializeDefault `ext1Q`
+  serializeDataList `extQ`
+  (serializeBinaryList tag_str      :: String   -> Put) `extQ`
+  (serializeBinaryList tag_int_list :: [Int]    -> Put) `extQ`
+  (serializeBinaryList tag_flt_list :: [Float]  -> Put) `extQ`
+  (serializeBinaryList tag_dbl_list :: [Double] -> Put) `extQ`
   serializeFloat `extQ`
   serializeDouble
   where
     serializeDefault t =
       case constrRep (toConstr t) of
         AlgConstr i   -> putVInt (fromIntegral i) tag_con >>
-                         foldr (>>) (return ()) (gmapQ serializeM t) >>
+                         gmapQr (>>) (return ()) serializeM t >>
                          putTag tag_end
         IntConstr i   -> putVInt i tag_int
         FloatConstr r -> putTag tag_rational >> put r
         CharConstr  c -> putTag tag_char  >> put c
 
-    serializeList :: Data a => [a] -> Put
-    serializeList xs = do
+    serializeBinaryList :: Binary a => Tag -> [a] -> Put
+    serializeBinaryList tag s = do
+      putVInt (fromIntegral (length s)) tag
+      mapM_ put s
+
+    serializeDataList :: Data a => [a] -> Put
+    serializeDataList xs = do
       putVInt (fromIntegral (length xs)) tag_list
       mapM_ serializeM xs
-
-    serializeString :: String -> Put
-    serializeString s = do
-      putVInt (fromIntegral (length s)) tag_str
-      mapM_ put s
       
     serializeFloat :: Float -> Put
     serializeFloat f = putTag tag_float >> put f
@@ -83,8 +89,12 @@ deserialize = runGet deserializeM
 
 deserializeM :: Data a => Get a
 deserializeM =
-  deserializeDefault `extR`
-  deserializeString `extR`
+  deserializeDefault `ext1R`
+  deserializeDataList `extR`
+  (deserializeBinaryList tag_str :: Get String) `extR`
+  (deserializeBinaryList tag_int_list :: Get [Int]) `extR`
+  (deserializeBinaryList tag_flt_list :: Get [Int]) `extR`
+  (deserializeBinaryList tag_dbl_list :: Get [Int]) `extR`
   deserializeChar `extR`
   deserializeInt `extR`
   deserializeFloat `extR`
@@ -96,15 +106,26 @@ deserializeM =
       getTag tag_end
       return x
 
-    deserializeString :: Get String
-    deserializeString = do
-      len <- getVInt tag_str
-      getString len
+    deserializeDataList :: Data a => Get [a]
+    deserializeDataList = do
+      len <- getVInt tag_list
+      getList len
       where
-        getString 0 = return []
-        getString n = do
+        getList 0 = return []
+        getList n = do
+          c  <- deserializeM
+          cs <- getList (n-1)
+          return (c:cs)
+
+    deserializeBinaryList :: Binary a => Tag -> Get [a]
+    deserializeBinaryList tag = do
+      len <- getVInt tag
+      getList len
+      where
+        getList 0 = return []
+        getList n = do
           c  <- get
-          cs <- getString (n-1)
+          cs <- getList (n-1)
           return (c:cs)
 
     deserializeChar :: Get Char
