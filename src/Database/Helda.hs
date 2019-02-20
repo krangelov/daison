@@ -2,7 +2,7 @@
 module Database.Helda
             ( Database, openDB, closeDB
             , Table, table
-            , Index, index, withIndex
+            , Index, index, withIndex, indexedTable
             , runHelda, AccessMode(..)
             , createTable, tryCreateTable
             , dropTable, tryDropTable
@@ -320,6 +320,8 @@ index ~tbl@(Table tname indices) iname = Index tbl (tname++"_"++iname)
 withIndex :: Data b => Table a -> Index a b -> Table a
 withIndex (Table tname indices) (Index _ iname fn) = Table tname ((iname,map serialize . fn) : indices)
 
+indexedTable :: Index a b -> Table a
+indexedTable (Index tbl _ _) = tbl
 
 -----------------------------------------------------------------
 -- Queries
@@ -463,10 +465,10 @@ instance Data b => From (Index a b) where
           Nothing       -> return Done
           Just (key,bs) -> return (Output key (deserializeKeys bs))
 
-fromIndexAt :: (Data a,Data b) => Table a -> Index a b -> b -> Query (Key a,a)
-fromIndexAt tbl idx x = do key <- fromAt idx x
-                           val <- fromAt tbl key
-                           return (key,val)
+fromIndexAt :: (Data a,Data b) => Index a b -> b -> Query (Key a,a)
+fromIndexAt idx x = do key <- fromAt idx x
+                       val <- fromAt (indexedTable idx) key
+                       return (key,val)
 
 
 -----------------------------------------------------------------
