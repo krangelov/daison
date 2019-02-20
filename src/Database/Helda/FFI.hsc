@@ -7,14 +7,14 @@ import Foreign.C
 
 data Btree
 data BtCursor
-data UnpackedRecord
 
 openFlags = (#const SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB) :: CInt
 
 sqlite_OK = (#const SQLITE_OK) :: CInt
 sqlite_ABORT_ROLLBACK = (#const SQLITE_ABORT_ROLLBACK) :: CInt
 
-btreeINTKEY = (#const BTREE_INTKEY) :: CInt
+btreeINTKEY  = (#const BTREE_INTKEY)  :: CInt
+btreeBLOBKEY = (#const BTREE_BLOBKEY) :: CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeOpen"
   sqlite3BtreeOpen :: CString -> CString -> Ptr (Ptr Btree) -> CInt -> CInt -> IO CInt
@@ -52,8 +52,8 @@ foreign import ccall "sqlite3Btree.h sqlite3BtreeNext"
 foreign import ccall "sqlite3Btree.h sqlite3BtreeLast"
   sqlite3BtreeLast :: Ptr BtCursor -> Ptr CInt -> IO CInt
 
-foreign import ccall "sqlite3Btree.h sqlite3BtreeMovetoUnpacked"
-  sqlite3BtreeMovetoUnpacked :: Ptr BtCursor -> Ptr UnpackedRecord -> Int64 -> CInt -> Ptr CInt -> IO CInt
+foreign import ccall "sqlite3Btree.h sqlite3BtreeMoveTo"
+  sqlite3BtreeMoveTo :: Ptr BtCursor -> Ptr () -> Int64 -> CInt -> Ptr CInt -> IO CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeDataSize"
   sqlite3BtreeDataSize :: Ptr BtCursor -> Ptr Word32 -> IO CInt
@@ -81,6 +81,9 @@ foreign import ccall "sqlite3Btree.h sqlite3BtreeLockTable"
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeKeySize"
   sqlite3BtreeKeySize :: Ptr BtCursor -> Ptr Int64 -> IO CInt
+
+foreign import ccall "sqlite3Btree.h sqlite3BtreeKey"
+  sqlite3BtreeKey :: Ptr BtCursor -> Word32 -> Word32 -> Ptr () -> IO CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeErrName"
   sqlite3BtreeErrName :: CInt -> IO CString

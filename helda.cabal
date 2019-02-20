@@ -14,3 +14,4 @@ library
   include-dirs:        src
   hs-source-dirs:      src
   extra-libraries: pthread
+  cc-options: -g3 -O0

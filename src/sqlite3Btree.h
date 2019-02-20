@@ -338,7 +338,6 @@ typedef struct BtCursor BtCursor;
 typedef struct BtShared BtShared;
 typedef struct Mem Mem;
 typedef struct KeyInfo KeyInfo;
-typedef struct UnpackedRecord UnpackedRecord;
 
 
 int sqlite3BtreeOpen(
@@ -477,33 +476,6 @@ int sqlite3BtreeNewDb(Btree *p);
 #define BTREE_APPLICATION_ID      8
 #define BTREE_DATA_VERSION        15  /* A virtual meta-value */
 
-/*
-** An instance of the following structure holds information about a
-** single index record that has already been parsed out into individual
-** values.
-**
-** A record is an object that contains one or more fields of data.
-** Records are used to store the content of a table row and to store
-** the key of an index.  A blob encoding of a record is created by
-** the OP_MakeRecord opcode of the VDBE and is disassembled by the
-** OP_Column opcode.
-**
-** This structure holds a record that has already been disassembled
-** into its constituent fields.
-**
-** The r1 and r2 member variables are only used by the optimized comparison
-** functions vdbeRecordCompareInt() and vdbeRecordCompareString().
-*/
-struct UnpackedRecord {
-  KeyInfo *pKeyInfo;  /* Collation and sort-order information */
-  u16 nField;         /* Number of entries in apMem[] */
-  i8 default_rc;      /* Comparison result if keys are equal */
-  u8 errCode;         /* Error detected by xRecordCompare (CORRUPT or NOMEM) */
-  Mem *aMem;          /* Values */
-  int r1;             /* Value to return if (lhs > rhs) */
-  int r2;             /* Value to return if (rhs < lhs) */
-};
-
 /* One or more of the following flags are set to indicate the validOK
 ** representations of the value stored in the Mem struct.
 **
@@ -582,15 +554,9 @@ int sqlite3BtreeCursor(
 int sqlite3BtreeCursorSize(void);
 
 int sqlite3BtreeCloseCursor(BtCursor*);
-void sqlite3BtreeInitUnpackedRecord(
-  UnpackedRecord *pUnKey,
-  BtCursor* pCur,
-  int nField,
-  int default_rc,
-  Mem* pMem);
-int sqlite3BtreeMovetoUnpacked(
+int sqlite3BtreeMoveTo(
   BtCursor*,
-  UnpackedRecord *pUnKey,
+  const void *pKey,
   i64 intKey,
   int bias,
   int *pRes
@@ -667,11 +633,6 @@ void sqlite3BtreeCursorList(Btree*);
 # define sqlite3BtreeLeaveCursor(X)
 #endif
 
-u32 sqlite3BtreeSerialType(Mem *pMem, int file_format);
-u32 sqlite3BtreeSerialTypeLen(u32);
-u32 sqlite3BtreeSerialGet(const unsigned char*, u32, Mem *);
-u32 sqlite3BtreeSerialPut(u8*, Mem*, u32);
-
 /*
 ** Routines to read and write variable-length integers.  These used to
 ** be defined locally, but now we use the varint routines in the util.c
@@ -680,7 +641,6 @@ u32 sqlite3BtreeSerialPut(u8*, Mem*, u32);
 int sqlite3BtreePutVarint(unsigned char*, u64);
 u8 sqlite3BtreeGetVarint(const unsigned char *, u64 *);
 u8 sqlite3BtreeGetVarint32(const unsigned char *, u32 *);
-int sqlite3BtreeVarintLen(u64 v);
 
 /*
 ** The common case is for a varint to be a single byte.  They following
@@ -694,11 +654,6 @@ int sqlite3BtreeVarintLen(u64 v);
   sqlite3BtreePutVarint((A),(B)))
 #define getVarint    sqlite3BtreeGetVarint
 #define putVarint    sqlite3BtreePutVarint
-
-
-int sqlite3BtreeIdxRowid(Btree*, BtCursor*, i64*);
-
-int sqlite3BtreeRecordCompare(int,const void*,UnpackedRecord*);
 
 const char *sqlite3BtreeErrName(int rc);
 

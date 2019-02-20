@@ -3,19 +3,19 @@ module Database.Helda
             ( Database, openDB, closeDB
             , Table, table
             , Index, index, withIndex
-            , runSelda, AccessMode(..)
+            , runHelda, AccessMode(..)
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
             , select, from, fromAt, fromIndexAt
-            , insert, insertQuery, store, update
+            , insert, insertSelect, store, update
             ) where
 
 import Foreign
 import Foreign.C
 import Data.Data
 import Data.IORef
-import Data.ByteString.Lazy(ByteString,toStrict,fromStrict)
+import Data.ByteString(ByteString)
 import Data.ByteString.Unsafe(unsafeUseAsCStringLen,unsafePackCStringLen,unsafePackMallocCStringLen)
 import qualified Data.Map as Map
 import Control.Exception(Exception,throwIO,bracket,bracket_,onException)
@@ -84,7 +84,7 @@ fetchSchema pBtree schemaRef = do
                        ptr <- sqlite3BtreeDataFetch pCursor pSize
                        amt <- peek pSize
                        bs <- unsafePackCStringLen (castPtr ptr,fromIntegral amt)
-                       return $! (deserialize (fromStrict bs))
+                       return $! (deserialize bs)
       return (name,(key,tnum))
 
 updateSchema pBtree schemaRef schema = do
@@ -102,15 +102,15 @@ closeDB (Database pBtree _) = do
 -- The monad
 -----------------------------------------------------------------
 
-newtype Selda a = Selda {doTransaction :: Database -> IO a}
+newtype Helda a = Helda {doTransaction :: Database -> IO a}
 
 data AccessMode = ReadWriteMode | ReadOnlyMode
 
 toCMode ReadWriteMode = 1
 toCMode ReadOnlyMode  = 0
 
-runSelda :: Database -> AccessMode -> Selda a -> IO a
-runSelda db@(Database pBtree schemaRef) m t =
+runHelda :: Database -> AccessMode -> Helda a -> IO a
+runHelda db@(Database pBtree schemaRef) m t =
   (do checkSqlite3Error $ sqlite3BtreeBeginTrans pBtree (toCMode m)
       r <- doTransaction t db
       checkSqlite3Error $ sqlite3BtreeCommit pBtree
@@ -118,16 +118,16 @@ runSelda db@(Database pBtree schemaRef) m t =
   `onException`
   (checkSqlite3Error $ sqlite3BtreeRollback pBtree sqlite_ABORT_ROLLBACK 0)
 
-instance Functor Selda where
-  fmap f (Selda m) = Selda (\db -> fmap f (m db))
+instance Functor Helda where
+  fmap f (Helda m) = Helda (\db -> fmap f (m db))
 
-instance Applicative Selda where
-  pure x  = Selda (\db -> pure x)
-  f <*> g = Selda (\db -> doTransaction f db <*> doTransaction g db)
+instance Applicative Helda where
+  pure x  = Helda (\db -> pure x)
+  f <*> g = Helda (\db -> doTransaction f db <*> doTransaction g db)
 
-instance Monad Selda where
-  return x = Selda (\db -> return x)
-  f >>= g  = Selda (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
+instance Monad Helda where
+  return x = Helda (\db -> return x)
+  f >>= g  = Helda (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
 
 
 -----------------------------------------------------------------
@@ -135,17 +135,17 @@ instance Monad Selda where
 -----------------------------------------------------------------
 
 type Key a     = Int64
-data Table a   = Table String [(String,a -> Maybe ByteString)]
+data Table a   = Table String [(String,a -> [ByteString])]
 
 table :: String -> Table a
 table name = Table name []
 
-createTable :: Table a -> Selda ()
-createTable (Table name indices) = Selda $ \db ->
+createTable :: Table a -> Helda ()
+createTable (Table name indices) = Helda $ \db ->
   createTableHelper db name indices True
 
-tryCreateTable :: Table a -> Selda ()
-tryCreateTable (Table name indices) = Selda $ \db ->
+tryCreateTable :: Table a -> Helda ()
+tryCreateTable (Table name indices) = Helda $ \db ->
   createTableHelper db name indices False
 
 createTableHelper (Database pBtree schemaRef) name indices doFail = do
@@ -163,7 +163,7 @@ createTableHelper (Database pBtree schemaRef) name indices doFail = do
                                           checkSqlite3Error $ sqlite3BtreeKeySize pCursor pKey
                                           fmap (+1) (peek pKey)
                           key_schema <- mkTable name btreeINTKEY pCursor key schema
-                          (key,schema) <- foldM (\(key,schema) (name,_) -> mkTable name 0 pCursor key schema) key_schema indices
+                          (key,schema) <- foldM (\(key,schema) (name,_) -> mkTable name btreeBLOBKEY pCursor key schema) key_schema indices
                           updateSchema pBtree schemaRef schema)
   where
     mkTable name flags pCursor key schema = do
@@ -174,16 +174,16 @@ createTableHelper (Database pBtree schemaRef) name indices doFail = do
         Nothing -> do tnum <- alloca $ \pTNum -> do
                                 checkSqlite3Error $ sqlite3BtreeCreateTable pBtree pTNum flags
                                 fmap fromIntegral (peek pTNum)
-                      unsafeUseAsCStringLen (toStrict (serialize (name,tnum))) $ \(ptr,size) -> do
+                      unsafeUseAsCStringLen (serialize (name,tnum)) $ \(ptr,size) -> do
                         sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                       return (key+1,Map.insert name (key,tnum) schema)
 
-dropTable :: Table a -> Selda ()
-dropTable (Table name indices) = Selda $ \db ->
+dropTable :: Table a -> Helda ()
+dropTable (Table name indices) = Helda $ \db ->
   dropTableHelper db name indices False
 
-tryDropTable :: Table a -> Selda ()
-tryDropTable (Table name indices) = Selda $ \db ->
+tryDropTable :: Table a -> Helda ()
+tryDropTable (Table name indices) = Helda $ \db ->
   dropTableHelper db name indices True
 
 dropTableHelper (Database pBtree schemaRef) name indices doFail = do
@@ -208,11 +208,11 @@ dropTableHelper (Database pBtree schemaRef) name indices doFail = do
 
     rmSchema pCursor key = do
       alloca $ \pRes ->
-        checkSqlite3Error $ sqlite3BtreeMovetoUnpacked pCursor nullPtr key 0 pRes
+        checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
       checkSqlite3Error $ sqlite3BtreeDelete pCursor 0
 
-alterTable :: (Data a, Data b) => Table a -> Table b -> (a -> b) -> Selda ()
-alterTable tbl@(Table name _) (Table name' _) f = Selda $ \(Database pBtree schemaRef) -> do
+alterTable :: (Data a, Data b) => Table a -> Table b -> (a -> b) -> Helda ()
+alterTable tbl@(Table name _) (Table name' _) f = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   case Map.lookup name schema of
     Nothing         -> throwDoesn'tExist name
@@ -235,7 +235,7 @@ alterTable tbl@(Table name _) (Table name' _) f = Selda $ \(Database pBtree sche
                                      checkSqlite3Error $ sqlite3BtreeCursor pBtree 1 1 0 0 ppCursor
                                      peek ppCursor)
                                   (\pCursor -> checkSqlite3Error $ sqlite3BtreeCloseCursor pCursor)
-                                  (\pCursor -> unsafeUseAsCStringLen (toStrict (serialize (name',tnum'))) $ \(ptr,size) -> do
+                                  (\pCursor -> unsafeUseAsCStringLen (serialize (name',tnum')) $ \(ptr,size) -> do
                                                  sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0)
                           alloca $ \piMoved -> do
                             checkSqlite3Error $ sqlite3BtreeDropTable pBtree (fromIntegral tnum) piMoved
@@ -257,13 +257,13 @@ alterTable tbl@(Table name _) (Table name' _) f = Selda $ \(Database pBtree sche
                 allocaBytes (fromIntegral size) $ \ptr -> do
                   checkSqlite3Error $ sqlite3BtreeData pSrcCursor 0 size ptr
                   bs <- unsafePackCStringLen (castPtr ptr,fromIntegral size)
-                  let bs' = (toStrict . serialize . f . deserialize . fromStrict) bs
+                  let bs' = (serialize . f . deserialize) bs
                   unsafeUseAsCStringLen bs' $ \(ptr',size') -> do
                     checkSqlite3Error $ sqlite3BtreeInsert pDstCursor nullPtr key (castPtr ptr') (fromIntegral size') 0 0 0
                 step sqlite3BtreeNext pSrcCursor pDstCursor
 
-renameTable :: Table a -> String -> Selda ()
-renameTable (Table name _) name' = Selda $ \(Database pBtree schemaRef) -> do
+renameTable :: Table a -> String -> Helda ()
+renameTable (Table name _) name' = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   case Map.lookup name schema of
     Nothing         -> throwDoesn'tExist name
@@ -273,49 +273,52 @@ renameTable (Table name _) name' = Selda $ \(Database pBtree schemaRef) -> do
                                      checkSqlite3Error $ sqlite3BtreeCursor pBtree 1 1 0 0 ppCursor
                                      peek ppCursor)
                                   (\pCursor -> checkSqlite3Error $ sqlite3BtreeCloseCursor pCursor)
-                                  (\pCursor -> unsafeUseAsCStringLen (toStrict (serialize (name',tnum))) $ \(ptr,size) -> do
+                                  (\pCursor -> unsafeUseAsCStringLen (serialize (name',tnum)) $ \(ptr,size) -> do
                                                  sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0)
                           updateSchema pBtree schemaRef (Map.insert name' (key,tnum) (Map.delete name schema))
                           return ()
 
 
-openTable pBtree schema (Table name _) m =
+openBtreeCursor pBtree schema name m n x =
   case Map.lookup name schema of
     Just (_,tnum) -> do sqlite3BtreeLockTable pBtree (fromIntegral tnum) (fromIntegral cmode)
                         alloca $ \ppCursor -> do
-                          checkSqlite3Error $ sqlite3BtreeCursor pBtree (fromIntegral tnum) cmode 0 0 ppCursor
+                          checkSqlite3Error $ sqlite3BtreeCursor pBtree (fromIntegral tnum) cmode n x ppCursor
                           peek ppCursor
     Nothing       -> throwDoesn'tExist name
   where
     cmode = toCMode m
 
-closeTable pCursor = checkSqlite3Error $ sqlite3BtreeCloseCursor pCursor
+closeBtreeCursor pCursor = checkSqlite3Error $ sqlite3BtreeCloseCursor pCursor
 
 
-withTable pBtree schema (Table name _) m io =
-  case Map.lookup name schema of
-    Just (_,tnum) -> do sqlite3BtreeLockTable pBtree (fromIntegral tnum) (fromIntegral cmode)
-                        bracket (alloca $ \ppCursor -> do
-                                   checkSqlite3Error $ sqlite3BtreeCursor pBtree (fromIntegral tnum) cmode 0 0 ppCursor
-                                   peek ppCursor)
-                                (\pCursor -> checkSqlite3Error $ sqlite3BtreeCloseCursor pCursor)
-                                io
-    Nothing       -> throwDoesn'tExist name
-  where
-    cmode = toCMode m
+withTableCursor pBtree schema (Table name _) m io =
+  bracket (openBtreeCursor pBtree schema name m 0 0)
+          (closeBtreeCursor)
+          io
 
+withIndexCursors pBtree schema (Table _ indices) m io =
+  forM_ indices $ \(name,fn) ->
+    bracket (openBtreeCursor pBtree schema name m 1 1)
+            (closeBtreeCursor)
+            (io fn)
+
+withIndexCursor pBtree schema (Index tbl name fn) m io =
+  bracket (openBtreeCursor pBtree schema name m 1 1)
+          (closeBtreeCursor)
+          (io (map serialize . fn))
 
 -----------------------------------------------------------------
 -- Access the indices
 -----------------------------------------------------------------
 
-data    Index a b = Index String (a -> Maybe b)
+data    Index a b = Index (Table a) String (a -> [b])
 
-index :: String -> (a -> Maybe b) -> Index a b
-index = Index
+index :: Table a -> String -> (a -> [b]) -> Index a b
+index ~tbl@(Table tname indices) iname = Index tbl (tname++"_"++iname)
 
 withIndex :: Data b => Table a -> Index a b -> Table a
-withIndex (Table tname indices) (Index iname fn) = Table tname ((iname,fmap serialize . fn) : indices)
+withIndex (Table tname indices) (Index _ iname fn) = Table tname ((iname,map serialize . fn) : indices)
 
 
 -----------------------------------------------------------------
@@ -367,8 +370,8 @@ instance MonadPlus Query where
   mplus f g = Query (\pBtree schema -> do r <- doQuery f pBtree schema
                                           appendQSeq id r (doQuery g pBtree schema))
 
-select :: Query a -> Selda [a]
-select q = Selda $ \(Database pBtree schemaRef) -> do
+select :: Query a -> Helda [a]
+select q = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   seq <- doQuery q pBtree schema
   loop seq
@@ -393,8 +396,8 @@ instance Data a => From (Table a) where
   type K (Table a) = (Key a)
   type V (Table a) = a
 
-  from tbl = Query $ \pBtree schema -> do
-    pCursor <- openTable pBtree schema tbl ReadOnlyMode
+  from (Table name _) = Query $ \pBtree schema -> do
+    pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 0 0
     step sqlite3BtreeFirst pCursor
     where
       step moveCursor pCursor = do
@@ -415,14 +418,14 @@ instance Data a => From (Table a) where
                    ptr  <- mallocBytes (fromIntegral size)
                    checkSqlite3Error $ sqlite3BtreeData pCursor 0 size ptr
                    bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
-                   return (Output (key, deserialize (fromStrict bs)) (step sqlite3BtreeNext pCursor)))
+                   return (Output (key, deserialize bs) (step sqlite3BtreeNext pCursor)))
                `onException`
                (sqlite3BtreeCloseCursor pCursor)
 
   fromAt tbl key = Query $ \pBtree schema ->
-    withTable pBtree schema tbl ReadOnlyMode $ \pCursor -> do
+    withTableCursor pBtree schema tbl ReadOnlyMode $ \pCursor -> do
       res <- alloca $ \pRes -> do
-               checkSqlite3Error $ sqlite3BtreeMovetoUnpacked pCursor nullPtr key 0 pRes
+               checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
                peek pRes
       if res /= 0
         then return Done
@@ -430,13 +433,35 @@ instance Data a => From (Table a) where
                   checkSqlite3Error $ sqlite3BtreeDataSize pCursor pSize
                   size <- peek pSize
                   ptr <- mallocBytes (fromIntegral size)
-                  checkSqlite3Error $ sqlite3BtreeData pCursor 0 size ptr
                   bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
-                  return (Output (deserialize (fromStrict bs)) nilQSeq)
+                  checkSqlite3Error $ sqlite3BtreeData pCursor 0 size ptr
+                  return (Output (deserialize bs) nilQSeq)
 
 instance Data b => From (Index a b) where
   type K (Index a b) = b
   type V (Index a b) = Key a
+  
+  fromAt idx val = Query $ \pBtree schema ->
+    withIndexCursor pBtree schema idx ReadOnlyMode $ \fn pCursor ->
+    unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
+      res <- alloca $ \pRes -> do
+               checkSqlite3Error $ sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+               peek pRes
+      if res /= 0
+        then return Done
+        else do alloca $ \pSize -> do
+                  checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
+                  payloadSize <- peek pSize
+                  let size = fromIntegral payloadSize-indexSize
+                  ptr <- mallocBytes size
+                  bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
+                  checkSqlite3Error $ sqlite3BtreeKey pCursor (fromIntegral indexSize) (fromIntegral size) ptr
+                  deserializeKeys bs
+    where
+      deserializeKeys bs =
+        case deserializeKey bs of
+          Nothing       -> return Done
+          Just (key,bs) -> return (Output key (deserializeKeys bs))
 
 fromIndexAt :: (Data a,Data b) => Table a -> Index a b -> b -> Query (Key a,a)
 fromIndexAt tbl idx x = do key <- fromAt idx x
@@ -448,26 +473,46 @@ fromIndexAt tbl idx x = do key <- fromAt idx x
 -- Insert
 -----------------------------------------------------------------
 
-insert :: Data a => Table a -> a -> Selda (Key a)
-insert tbl val = Selda $ \(Database pBtree schemaRef) -> do
+insert :: Data a => Table a -> a -> Helda (Key a)
+insert tbl val = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
-  withTable pBtree schema tbl ReadWriteMode $ \pCursor -> do
-    res <- alloca $ \pRes -> do
-             sqlite3BtreeLast pCursor pRes
-             peek pRes
-    key <- if res /= 0
-             then return 1
-             else alloca $ \pKey -> do
-                    checkSqlite3Error $ sqlite3BtreeKeySize pCursor pKey
-                    fmap (+1) (peek pKey)
-    unsafeUseAsCStringLen (toStrict (serialize val)) $ \(ptr,size) -> do
-      checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
-    return key
+  key <- withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
+           res <- alloca $ \pRes -> do
+                    sqlite3BtreeLast pCursor pRes
+                    peek pRes
+           key <- if res /= 0
+                    then return 1
+                    else alloca $ \pKey -> do
+                           checkSqlite3Error $ sqlite3BtreeKeySize pCursor pKey
+                           fmap (+1) (peek pKey)
+           unsafeUseAsCStringLen (serialize val) $ \(ptr,size) -> do
+             checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 1 (-1)
+           return key
+  unsafeUseAsCStringLen (serializeKey key) $ \(keyPtr,keySize) -> do
+    withIndexCursors pBtree schema tbl ReadWriteMode $ \fn pCursor ->
+      forM_ (fn val) $ \bs ->
+      unsafeUseAsCStringLen bs $ \(indexPtr,indexSize) -> do
+        res <- alloca $ \pRes -> do
+                 checkSqlite3Error $ sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+                 peek pRes
+        if res == 0
+          then do payloadSize <- alloca $ \pPayloadSize -> do
+                                   checkSqlite3Error $ sqlite3BtreeKeySize pCursor pPayloadSize
+                                   peek pPayloadSize
+                  allocaBytes (fromIntegral payloadSize+keySize) $ \buf -> do
+                    checkSqlite3Error $ sqlite3BtreeKey pCursor 0 (fromIntegral payloadSize) buf
+                    copyBytes (buf `plusPtr` fromIntegral payloadSize) keyPtr keySize
+                    checkSqlite3Error $ sqlite3BtreeInsert pCursor buf (fromIntegral (fromIntegral payloadSize+keySize)) nullPtr 0 0 0 0 
+          else allocaBytes (indexSize+keySize) $ \buf -> do
+                 copyBytes buf indexPtr indexSize
+                 copyBytes (buf `plusPtr` indexSize) keyPtr keySize
+                 checkSqlite3Error $ sqlite3BtreeInsert pCursor (castPtr buf) (fromIntegral (indexSize+keySize)) nullPtr 0 0 0 0
+  return key
 
-insertQuery :: Data a => Table a -> Query a -> Selda (Key a,Key a)
-insertQuery tbl q = Selda $ \(Database pBtree schemaRef) -> do
+insertSelect :: Data a => Table a -> Query a -> Helda (Key a,Key a)
+insertSelect tbl q = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
-  withTable pBtree schema tbl ReadWriteMode $ \pCursor -> do
+  withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
     res <- alloca $ \pRes -> do
              sqlite3BtreeLast pCursor pRes
              peek pRes
@@ -481,7 +526,7 @@ insertQuery tbl q = Selda $ \(Database pBtree schemaRef) -> do
     return (key,key')
   where
     loop pCursor key Done           = return key
-    loop pCursor key (Output val r) = do unsafeUseAsCStringLen (toStrict (serialize val)) $ \(ptr,size) -> do
+    loop pCursor key (Output val r) = do unsafeUseAsCStringLen (serialize val) $ \(ptr,size) -> do
                                            checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                                          r >>= loop pCursor (key+1)
 
@@ -490,22 +535,22 @@ insertQuery tbl q = Selda $ \(Database pBtree schemaRef) -> do
 -- Update
 -----------------------------------------------------------------
 
-store :: Data a => Table a -> Key a -> a -> Selda ()
-store tbl key val = Selda $ \(Database pBtree schemaRef) -> do
+store :: Data a => Table a -> Key a -> a -> Helda ()
+store tbl key val = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
-  withTable pBtree schema tbl ReadWriteMode $ \pCursor ->
-    unsafeUseAsCStringLen (toStrict (serialize val)) $ \(ptr,size) -> do
+  withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor ->
+    unsafeUseAsCStringLen (serialize val) $ \(ptr,size) -> do
       checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
 
-update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Selda ()
-update tbl f q = Selda $ \(Database pBtree schemaRef) -> do
+update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Helda ()
+update tbl f q = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
-  withTable pBtree schema tbl ReadWriteMode $ \pCursor -> do
+  withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
      seq <- doQuery q pBtree schema
      loop pCursor seq
   where
     loop pCursor Done               = return ()
-    loop pCursor (Output (key,x) r) = do unsafeUseAsCStringLen (toStrict (serialize (f key x))) $ \(ptr,size) -> do
+    loop pCursor (Output (key,x) r) = do unsafeUseAsCStringLen (serialize (f key x)) $ \(ptr,size) -> do
                                            checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                                          r >>= loop pCursor
 
