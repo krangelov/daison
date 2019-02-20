@@ -1,6 +1,7 @@
 {-# LANGUAGE ExistentialQuantification, TypeFamilies #-}
 module Database.Helda
             ( Database, openDB, closeDB
+            , Key
             , Table, table
             , Index, index, withIndex, indexedTable
             , runHelda, AccessMode(..)
