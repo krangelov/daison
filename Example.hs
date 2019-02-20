@@ -3,7 +3,7 @@ import Database.Helda
 import System.Environment
 
 people_name :: Index (String,Int) String
-people_name = index "people_name" (Just . fst)
+people_name = index people "name" fst
 
 people :: Table (String,Int)
 people = table "people"
@@ -11,7 +11,7 @@ people = table "people"
 
 main = do
   db <- openDB "test.db"
-  x <- runSelda db ReadWriteMode $ do
+  x <- runHelda db ReadWriteMode $ do
          --dropTable people
          tryCreateTable people
          insert people ("Aga",15)
