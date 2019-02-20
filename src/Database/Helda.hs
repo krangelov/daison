@@ -131,6 +131,8 @@ instance Monad Helda where
   return x = Helda (\db -> return x)
   f >>= g  = Helda (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
 
+instance MonadIO Helda where
+  liftIO f = Helda (\db -> f)
 
 -----------------------------------------------------------------
 -- Access the tables
