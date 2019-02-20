@@ -40996,7 +40996,7 @@ SQLITE_PRIVATE u64 getVInt(const unsigned char** p, int bits, u64 v)
 
 	for (;;) {
 		unsigned char c = *(*p)++;
-		if (c & 1 == 0) {
+		if ((c & 1) == 0) {
 			v |= ((u64) c) << bits;
 			break;
 		} else {
