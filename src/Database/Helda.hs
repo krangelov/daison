@@ -3,7 +3,7 @@ module Database.Helda
             ( Database, openDB, closeDB
             , Key
             , Table, table
-            , Index, index, withIndex, indexedTable
+            , Index, index, listIndex, maybeIndex, withIndex, indexedTable
             , runHelda, AccessMode(..)
             , createTable, tryCreateTable
             , dropTable, tryDropTable
@@ -18,6 +18,7 @@ import Data.Data
 import Data.IORef
 import Data.ByteString(ByteString)
 import Data.ByteString.Unsafe(unsafeUseAsCStringLen,unsafePackCStringLen,unsafePackMallocCStringLen)
+import Data.Maybe(maybeToList)
 import qualified Data.Map as Map
 import Control.Exception(Exception,throwIO,bracket,bracket_,onException)
 import Control.Applicative
@@ -315,8 +316,14 @@ withIndexCursor pBtree schema (Index tbl name fn) m io =
 
 data    Index a b = Index (Table a) String (a -> [b])
 
-index :: Table a -> String -> (a -> [b]) -> Index a b
-index ~tbl@(Table tname indices) iname = Index tbl (tname++"_"++iname)
+index :: Table a -> String -> (a -> b) -> Index a b
+index tbl iname f = listIndex tbl iname ((:[]) . f)
+
+listIndex :: Table a -> String -> (a -> [b]) -> Index a b
+listIndex ~tbl@(Table tname indices) iname = Index tbl (tname++"_"++iname)
+
+maybeIndex :: Table a -> String -> (a -> Maybe b) -> Index a b
+maybeIndex tbl iname f = listIndex tbl iname (maybeToList . f)
 
 withIndex :: Data b => Table a -> Index a b -> Table a
 withIndex (Table tname indices) (Index _ iname fn) = Table tname ((iname,map serialize . fn) : indices)
