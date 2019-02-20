@@ -10,6 +10,7 @@ import Data.Binary.Get
 import Data.Generics
 import Data.ByteString(ByteString)
 import Data.ByteString.Lazy(fromStrict,toStrict)
+import Control.Monad
 
 data Tag = Tag {-# UNPACK #-} !Word8 {-# UNPACK #-} !Int String
 
@@ -58,10 +59,10 @@ serializeM =
     serializeDataList xs = do
       putVInt (fromIntegral (length xs)) tag_list
       mapM_ serializeM xs
-      
+
     serializeFloat :: Float -> Put
     serializeFloat f = putTag tag_float >> put f
-      
+
     serializeDouble :: Double -> Put
     serializeDouble f = putTag tag_double >> put f
 
@@ -100,17 +101,16 @@ deserializeM =
   deserializeDataList `extR`
   (deserializeBinaryList tag_str :: Get String) `extR`
   (deserializeBinaryList tag_int_list :: Get [Int]) `extR`
-  (deserializeBinaryList tag_flt_list :: Get [Int]) `extR`
-  (deserializeBinaryList tag_dbl_list :: Get [Int]) `extR`
+  (deserializeBinaryList tag_flt_list :: Get [Float]) `extR`
+  (deserializeBinaryList tag_dbl_list :: Get [Double]) `extR`
   deserializeChar `extR`
-  deserializeInt `extR`
   deserializeFloat `extR`
   deserializeDouble
   where
     deserializeDefault = do
-      con  <- getConstr                   -- get the constructor
-      x    <- fromConstrM deserializeM con -- Read the children
-      getTag tag_end
+      (con,f) <- getConstr                    -- get the constructor
+      x       <- fromConstrM deserializeM con -- Read the children
+      when f (getTag tag_end)
       return x
 
     deserializeDataList :: Data a => Get [a]
@@ -138,9 +138,6 @@ deserializeM =
     deserializeChar :: Get Char
     deserializeChar = getTag tag_char >> get
 
-    deserializeInt :: Get Int
-    deserializeInt = fmap fromIntegral $ getVInt tag_int
-
     deserializeFloat :: Get Float
     deserializeFloat = getTag tag_float >> get
 
@@ -155,12 +152,23 @@ deserializeM =
         getArg :: Get a'' -> a''
         getArg = undefined
 
-    getConstr :: Get Constr
-    getConstr = do
-      i <- getVInt tag_con
-      if i <= fromIntegral (maxConstrIndex myDataType)
-        then return (indexConstr myDataType (fromIntegral i))
-        else fail ("the data type has no constructor with index "++show i)
+    getConstr :: Get (Constr,Bool)
+    getConstr =
+      do i <- getVInt tag_con
+         if i <= fromIntegral (maxConstrIndex myDataType)
+           then return (indexConstr myDataType (fromIntegral i),True)
+           else fail ("the data type has no constructor with index "++show i)
+      `mplus`
+      do i <- getVInt tag_int
+         return (mkIntegralConstr myDataType i,False)
+      `mplus`
+      do getTag tag_rational
+         r <- get
+         return (mkRealConstr myDataType (r :: Rational),False)
+      `mplus`
+      do getTag tag_char
+         c <- get
+         return (mkCharConstr myDataType c,False)
 
 
 getTag :: Tag -> Get ()
