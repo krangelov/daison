@@ -49,6 +49,9 @@ foreign import ccall "sqlite3Btree.h sqlite3BtreeFirst"
 foreign import ccall "sqlite3Btree.h sqlite3BtreeNext"
   sqlite3BtreeNext :: Ptr BtCursor -> Ptr CInt -> IO CInt
 
+foreign import ccall "sqlite3Btree.h sqlite3BtreePrevious"
+  sqlite3BtreePrevious :: Ptr BtCursor -> Ptr CInt -> IO CInt
+
 foreign import ccall "sqlite3Btree.h sqlite3BtreeLast"
   sqlite3BtreeLast :: Ptr BtCursor -> Ptr CInt -> IO CInt
 
@@ -63,6 +66,9 @@ foreign import ccall "sqlite3Btree.h sqlite3BtreeDataFetch"
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeData"
   sqlite3BtreeData :: Ptr BtCursor -> Word32 -> Word32 -> Ptr () -> IO CInt
+
+foreign import ccall "sqlite3Btree.h sqlite3BtreeRecordCompare"
+  sqlite3BtreeRecordCompare :: Int64 -> Ptr () -> Ptr () -> Ptr CInt -> IO CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeCreateTable"
   sqlite3BtreeCreateTable :: Ptr Btree -> Ptr CInt -> CInt -> IO CInt

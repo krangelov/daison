@@ -41033,7 +41033,7 @@ utf8Decode(const unsigned char** p)
 }
 
 SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
-  int nCell, const unsigned char** pCell, const unsigned char** pKey, int* errCode)
+  i64 nCell, const unsigned char** pCell, const unsigned char** pKey, int* errCode)
 {
 	unsigned char c,d;
 	int pos, res;
@@ -41144,8 +41144,8 @@ SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
 	}
 }
 
-SQLITE_PRIVATE int sqlite3BtreeRecordCompare(
-  int nCell, const void* pCell, const void* pKey, int* errCode)
+SQLITE_API int sqlite3BtreeRecordCompare(
+  i64 nCell, const void* pCell, const void* pKey, int* errCode)
 {
 	return sqlite3BtreeRecordCompareHelper(nCell,(const unsigned char**) &pCell,(const unsigned char**) &pKey,errCode);
 }

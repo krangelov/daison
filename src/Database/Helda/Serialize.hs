@@ -1,6 +1,6 @@
 {-# LANGUAGE BinaryLiterals #-}
 module Database.Helda.Serialize(serialize,deserialize,
-                                serializeKey,deserializeKey) where
+                                serializeKey, deserializeKey, deserializeIndex) where
 
 import Data.Int(Int64)
 import Data.Bits
@@ -203,3 +203,11 @@ deserializeKey bs =
     feed (Fail _ pos msg)  mb_bs = Nothing
     feed (Partial k)       mb_bs = feed (k mb_bs) Nothing
     feed (Done bs pos key) mb_bs = Just (fromIntegral key,bs)
+
+deserializeIndex :: Data a => ByteString -> (a,ByteString)
+deserializeIndex bs =
+  feed (runGetIncremental deserializeM) (Just bs)
+  where
+    feed (Fail _ pos msg)  mb_bs = error ("Database.Helda.deserializeIndex at position " ++ show pos ++ ": " ++ msg)
+    feed (Partial k)       mb_bs = feed (k mb_bs) Nothing
+    feed (Done bs pos val) mb_bs = (val,bs)
