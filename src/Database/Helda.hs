@@ -3,8 +3,9 @@ module Database.Helda
             ( Database, openDB, closeDB
             , Key
             , Table, table
-            , Index, index, listIndex, maybeIndex, withIndex, indexedTable
-            , runHelda, AccessMode(..)
+            , Index, index, listIndex, maybeIndex, withIndex
+            , indexedTable, applyIndex
+            , runHelda, AccessMode(..), Helda
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
@@ -335,6 +336,9 @@ withIndex (Table tname indices) (Index _ iname fn) = Table tname ((iname,map ser
 
 indexedTable :: Index a b -> Table a
 indexedTable (Index tbl _ _) = tbl
+
+applyIndex :: Index a b -> a -> [b]
+applyIndex (Index _ _ fn) = fn
 
 -----------------------------------------------------------------
 -- Queries
