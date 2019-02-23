@@ -68,7 +68,7 @@ foreign import ccall "sqlite3Btree.h sqlite3BtreeData"
   sqlite3BtreeData :: Ptr BtCursor -> Word32 -> Word32 -> Ptr () -> IO CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeRecordCompare"
-  sqlite3BtreeRecordCompare :: Int64 -> Ptr () -> Ptr () -> Ptr CInt -> IO CInt
+  sqlite3BtreeRecordCompare :: Int64 -> Ptr () -> Ptr () -> Ptr CInt -> IO Int64
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeCreateTable"
   sqlite3BtreeCreateTable :: Ptr Btree -> Ptr CInt -> CInt -> IO CInt

@@ -72,11 +72,11 @@ putTag (Tag tag tbits _) = putWord8 tag
 putVInt :: Integer -> Tag -> Put
 putVInt n (Tag tag tbits _) =
   let rbits = 7-tbits
-      n0    = fromIntegral (n .&. (1 `shiftL` rbits - 1)) `shiftL` 1
+      n0    = fromIntegral (n .&. (1 `shiftL` rbits - 1)) `shiftL` (tbits+1)
       n'    = n `shiftR` rbits
-  in if n' == 0
-       then do putWord8 ((n0 `shiftL` tbits) .|. tag)
-       else do putWord8 (((n0 .|. 1) `shiftL` tbits) .|. tag)
+  in if (n' == 0 && (n0 .&. 0x80 == 0)) || (n' == -1 && (n0 .&. 0x80 /= 0))
+       then do putWord8 (n0 .|. tag)
+       else do putWord8 (n0 .|. (1 `shiftL` tbits) .|. tag)
                putRest n'
 
 serializeKey :: Int64 -> ByteString
@@ -87,7 +87,7 @@ putRest :: Integer -> Put
 putRest n =
   let n0 = fromIntegral (n .&. (1 `shiftL` 7 - 1)) `shiftL` 1
       n' = n `shiftR` 7
-  in if n' == 0
+  in if (n' == 0 && (n0 .&. 0x80 == 0)) || (n' == -1 && (n0 .&. 0x80 /= 0))
        then putWord8 n0
        else do putWord8 (n0 .|. 1)
                putRest n'
@@ -184,7 +184,9 @@ getVInt (Tag tag bits name) = do
   if w .&. (1 `shiftL` bits - 1) == tag
     then let n = fromIntegral (w `shiftR` (bits+1))
          in if w .&. (1 `shiftL` bits) == 0
-              then return n
+              then if w .&. 0x80 /= 0
+                     then return (n .|. ((-1) `shiftL` (7-bits)))
+                     else return n
               else getRest (7-bits) n
     else fail ("failed to find "++name)
 
@@ -193,7 +195,9 @@ getRest bits n = do
   w <- getWord8
   let n' = n .|. (fromIntegral (w .&. 0xFE) `shiftL` (bits-1))
   if w .&. 1 == 0
-    then return n'
+    then if w .&. 0x80 /= 0
+           then return (n' .|. ((-128) `shiftL` bits))
+           else return n'
     else getRest (bits+7) n'
 
 deserializeKey :: ByteString -> Maybe (Int64,ByteString)

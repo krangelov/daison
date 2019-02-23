@@ -40985,7 +40985,7 @@ SQLITE_API int SQLITE_STDCALL sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   return rc;
 }
 
-SQLITE_PRIVATE u64 getVInt(const unsigned char** p, int bits, u64 v)
+SQLITE_PRIVATE i64 getVInt(const unsigned char** p, int bits, i64 v)
 {
 	v >>= bits;
 	if ((v & 1) == 0)
@@ -40997,10 +40997,12 @@ SQLITE_PRIVATE u64 getVInt(const unsigned char** p, int bits, u64 v)
 	for (;;) {
 		unsigned char c = *(*p)++;
 		if ((c & 1) == 0) {
-			v |= ((u64) c) << bits;
+			v |= ((i64) c) << bits;
+			if (c & 0x80 != 0)
+				v |= (-128) << bits;
 			break;
 		} else {
-			v |= ((u64) c & 0xFE) << bits;
+			v |= ((i64) c & 0xFE) << bits;
 			bits += 7;
 		}
 	}
@@ -41032,11 +41034,12 @@ utf8Decode(const unsigned char** p)
 	return u;
 }
 
-SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
+SQLITE_PRIVATE i64 sqlite3BtreeRecordCompareHelper(
   i64 nCell, const unsigned char** pCell, const unsigned char** pKey, int* errCode)
 {
 	unsigned char c,d;
-	int pos, res;
+	int pos;
+	i64 res;
 
 	if (nCell == 0) {
 		*errCode = SQLITE_CORRUPT;
@@ -41055,20 +41058,21 @@ SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
 
 	switch (c & 0b11) {
 	case 0b00: { // a list	 
-		u64 len1 = getVInt(pCell,2,c);
-		u64 len2 = getVInt(pKey, 2,d);
+		i64 len1 = getVInt(pCell,2,c);
+		i64 len2 = getVInt(pKey, 2,d);
 
 		while (len1 > 0 && len2 > 0) {
 			res = sqlite3BtreeRecordCompareHelper(pCellEnd-pCell,pCell,pKey,errCode);
-
 			if (res != 0)
 				return res;
+
+			len1--; len2--;
 		}
 		return (len1 - len2);
 	}
 	case 0b10: {  // a string
-		u64 len1 = getVInt(pCell,2,c);
-		u64 len2 = getVInt(pKey, 2,d);
+		i64 len1 = getVInt(pCell,2,c);
+		i64 len2 = getVInt(pKey, 2,d);
 
 		while (len1 > 0 && len2 > 0) {
 			u64 ch1 = utf8Decode(pCell); len1--;
@@ -41086,8 +41090,8 @@ SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
 		return (len1 - len2);
 	}
 	case 0b01: {  // an int
-		i64 int1 = (i64) getVInt(pCell,2,c);
-		i64 int2 = (i64) getVInt(pKey, 2,d);
+		i64 int1 = getVInt(pCell,2,c);
+		i64 int2 = getVInt(pKey, 2,d);
 
 		if (pCell > pCellEnd) {
 			*errCode = SQLITE_CORRUPT;
@@ -41102,8 +41106,8 @@ SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
 
 		switch (c & 0b111) {
 		case 0b011: {  // a constructor
-			u64 idx1 = getVInt(pCell,2,c);
-			u64 idx2 = getVInt(pKey, 2,d);
+			i64 idx1 = getVInt(pCell,2,c);
+			i64 idx2 = getVInt(pKey, 2,d);
 
 			if (pCell > pCellEnd) {
 				*errCode = SQLITE_CORRUPT;
@@ -41144,7 +41148,7 @@ SQLITE_PRIVATE int sqlite3BtreeRecordCompareHelper(
 	}
 }
 
-SQLITE_API int sqlite3BtreeRecordCompare(
+SQLITE_API i64 sqlite3BtreeRecordCompare(
   i64 nCell, const void* pCell, const void* pKey, int* errCode)
 {
 	return sqlite3BtreeRecordCompareHelper(nCell,(const unsigned char**) &pCell,(const unsigned char**) &pKey,errCode);
@@ -41225,7 +41229,8 @@ SQLITE_API int SQLITE_STDCALL sqlite3BtreeMoveTo(
   assert( pCur->apPage[0]->intKey==pCur->curIntKey );
   assert( pCur->curIntKey || pIdxKey );
   for(;;){
-    int lwr, upr, idx, c;
+    int lwr, upr, idx;
+    i64 c;
     Pgno chldPg;
     MemPage *pPage = pCur->apPage[pCur->iPage];
     u8 *pCell;                          /* Pointer to current cell in pPage */
@@ -41365,7 +41370,7 @@ SQLITE_API int SQLITE_STDCALL sqlite3BtreeMoveTo(
     if( pPage->leaf ){
       assert( pCur->aiIdx[pCur->iPage]<pCur->apPage[pCur->iPage]->nCell );
       pCur->aiIdx[pCur->iPage] = (u16)idx;
-      *pRes = c;
+      *pRes = (c < 0) ? -1 : (c > 0) ? 1 : 0;
       rc = SQLITE_OK;
       goto moveto_finish;
     }
