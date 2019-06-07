@@ -9,7 +9,7 @@ module Database.Helda
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
-            , select, anyOf, listAll
+            , select, anyOf, listAll, foldlQ, foldrQ
             , IntervalBoundry(..)
             , from,      fromAt,      fromInterval,      fromIntervalAsc,      fromIntervalDesc
             , fromIndex, fromIndexAt, fromIndexInterval, fromIndexIntervalAsc, fromIndexIntervalDesc
@@ -413,6 +413,25 @@ anyOf :: [a] -> Query a
 anyOf xs = Query (\pBtree schema -> loop xs)
   where loop []     = return Done
         loop (x:xs) = return (Output x (loop xs))
+
+foldlQ :: (b -> a -> b) -> b -> Query a -> Query b
+foldlQ f x q = Query $ \pBtree schema -> do
+    seq <- doQuery q pBtree schema
+    x <- loop x seq
+    return (Output x nilQSeq)
+    where
+      loop x Done         = return x
+      loop x (Output y r) = r >>= loop (f x y)
+
+foldrQ :: (a -> b -> b) -> b -> Query a -> Query b
+foldrQ f x q = Query $ \pBtree schema -> do
+    seq <- doQuery q pBtree schema
+    x <- loop seq
+    return (Output x nilQSeq)
+    where
+      loop Done         = return x
+      loop (Output x r) = do y <- r >>= loop
+                             return (f x y)
 
 -----------------------------------------------------------------
 -- Select
