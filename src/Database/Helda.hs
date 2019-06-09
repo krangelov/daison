@@ -9,7 +9,7 @@ module Database.Helda
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
-            , select, anyOf, listAll, foldlQ, foldrQ
+            , select, anyOf, listAll, foldlQ, foldl1Q, foldrQ
             , IntervalBoundry(..)
             , from,      fromAt,      fromInterval,      fromIntervalAsc,      fromIntervalDesc
             , fromIndex, fromIndexAt, fromIndexInterval, fromIndexIntervalAsc, fromIndexIntervalDesc
@@ -423,6 +423,17 @@ foldlQ f x q = Query $ \pBtree schema -> do
       loop x Done         = return x
       loop x (Output y r) = r >>= loop (f x y)
 
+foldl1Q :: (a -> a -> a) -> Query a -> Query a
+foldl1Q f q = Query $ \pBtree schema -> do
+    seq <- doQuery q pBtree schema
+    case seq of
+      Done       -> return Done
+      Output x r -> do x <- r >>= loop x
+                       return (Output x nilQSeq)
+    where
+      loop x Done         = return x
+      loop x (Output y r) = r >>= loop (f x y)
+
 foldrQ :: (a -> b -> b) -> b -> Query a -> Query b
 foldrQ f x q = Query $ \pBtree schema -> do
     seq <- doQuery q pBtree schema
@@ -463,10 +474,41 @@ instance Data a => From (Table a) where
   type K (Table a) = (Key a)
   type V (Table a) = a
 
-  fromIntervalAsc (Table name _) Unbounded Unbounded = Query $ \pBtree schema -> do
+  fromIntervalAsc (Table name _) s e = Query $ \pBtree schema -> do
     pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 0 0
-    step sqlite3BtreeFirst pCursor
+    step (start s) pCursor
     where
+      start (Including key) pCursor pRes = do
+        rc <- sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
+        when (rc == sqlite_OK) $ do res <- peek pRes
+                                    when (res > 0) $ poke pRes 0
+        return rc
+      start (Excluding key) pCursor pRes = do
+        rc <- sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
+        if rc == sqlite_OK
+          then do res <- peek pRes
+                  if res == 0
+                    then sqlite3BtreeNext pCursor pRes
+                    else return rc
+          else return rc
+      start Unbounded pCursor pRes =
+        sqlite3BtreeFirst pCursor pRes
+
+      moveNext pCursor pRes = do
+        rc <- sqlite3BtreeNext pCursor pRes
+        if rc /= sqlite_OK
+          then return rc
+          else alloca $ \pKey -> do
+                 rc <- sqlite3BtreeKeySize pCursor pKey
+                 if rc /= sqlite_OK
+                   then return rc
+                   else do key' <- peek pKey
+                           case e of
+                             Including key | key' >  key -> poke pRes 1
+                             Excluding key | key' >= key -> poke pRes 1
+                             _                           -> return ()
+                           return rc
+
       step moveCursor pCursor = do
         res <- (alloca $ \pRes -> do
                   checkSqlite3Error $ moveCursor pCursor pRes
@@ -485,7 +527,7 @@ instance Data a => From (Table a) where
                    ptr  <- mallocBytes (fromIntegral size)
                    checkSqlite3Error $ sqlite3BtreeData pCursor 0 size ptr
                    bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
-                   return (Output (key, deserialize bs) (step sqlite3BtreeNext pCursor)))
+                   return (Output (key, deserialize bs) (step moveNext pCursor)))
                `onException`
                (sqlite3BtreeCloseCursor pCursor)
 
