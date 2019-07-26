@@ -13,7 +13,7 @@ module Database.Helda
             , IntervalBoundry(..)
             , from,      fromAt,      fromInterval,      fromIntervalAsc,      fromIntervalDesc
             , fromIndex, fromIndexAt, fromIndexInterval, fromIndexIntervalAsc, fromIndexIntervalDesc
-            , insert, insertSelect, store, update
+            , insert, insertSelect, store, update, update_
             ) where
 
 import Foreign
@@ -822,8 +822,22 @@ store tbl key val = Helda $ \(Database pBtree schemaRef) -> do
       checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
   insertIndices pBtree schema tbl key val
 
-update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Helda ()
+update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Helda [(Key a,a)]
 update tbl f q = Helda $ \(Database pBtree schemaRef) -> do
+  schema <- fetchSchema pBtree schemaRef
+  withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
+     seq <- doQuery q pBtree schema
+     loop pCursor seq
+  where
+    loop pCursor Done               = return []
+    loop pCursor (Output (key,x) r) = do let y = f key x
+                                         unsafeUseAsCStringLen (serialize y) $ \(ptr,size) -> do
+                                           checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
+                                         ys <- r >>= loop pCursor
+                                         return ((key,y):ys)
+
+update_ :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Helda ()
+update_ tbl f q = Helda $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
      seq <- doQuery q pBtree schema
@@ -833,7 +847,6 @@ update tbl f q = Helda $ \(Database pBtree schemaRef) -> do
     loop pCursor (Output (key,x) r) = do unsafeUseAsCStringLen (serialize (f key x)) $ \(ptr,size) -> do
                                            checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                                          r >>= loop pCursor
-
 
 -----------------------------------------------------------------
 -- Exceptions
