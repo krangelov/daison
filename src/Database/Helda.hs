@@ -9,6 +9,7 @@ module Database.Helda
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
+            , Query
             , select, anyOf, listAll, foldlQ, foldl1Q, foldrQ
             , IntervalBoundry(..)
             , from,      fromAt,      fromInterval,      fromIntervalAsc,      fromIntervalDesc
