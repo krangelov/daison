@@ -10,10 +10,15 @@ module Database.Helda
             , dropTable, tryDropTable
             , alterTable, renameTable
             , Query
-            , select, anyOf, listAll, foldlQ, foldl1Q, foldrQ
+            , select, anyOf, listAll
+            , foldlQ, foldl1Q, foldrQ
+            , groupQ
             , IntervalBoundry(..)
             , from,      fromAt,      fromInterval,      fromIntervalAsc,      fromIntervalDesc
             , fromIndex, fromIndexAt, fromIndexInterval, fromIndexIntervalAsc, fromIndexIntervalDesc
+
+            , fromList,  fromAtList, fromIntervalList,   fromIntervalAscList,  fromIntervalDescList
+
             , insert, insertSelect, store, update, update_
             ) where
 
@@ -23,7 +28,7 @@ import Data.Data
 import Data.IORef
 import Data.ByteString(ByteString)
 import Data.ByteString.Unsafe(unsafeUseAsCStringLen,unsafePackCStringLen,unsafePackMallocCStringLen)
-import Data.Maybe(maybeToList)
+import Data.Maybe(maybeToList, fromMaybe)
 import qualified Data.Map as Map
 import Control.Exception(Exception,throwIO,bracket,bracket_,onException)
 import Control.Applicative
@@ -445,6 +450,17 @@ foldrQ f x q = Query $ \pBtree schema -> do
       loop (Output x r) = do y <- r >>= loop
                              return (f x y)
 
+groupQ :: Ord b => (a -> b) -> Query a -> Query [a]
+groupQ f q = Query $ \pBtree schema -> do
+    seq <- doQuery q pBtree schema
+    loop Map.empty seq
+    where
+      loop m Done         = Map.foldr yield nilQSeq m
+      loop m (Output x r) = r >>= loop (add x m)
+
+      add   x = Map.alter (Just . (x:) . fromMaybe []) (f x)
+      yield x = return . Output (reverse x)
+
 -----------------------------------------------------------------
 -- Select
 -----------------------------------------------------------------
@@ -551,176 +567,34 @@ instance Data b => From (Index a b) where
   type K (Index a b) = b
   type V (Index a b) = Key a
   
-  fromAt idx val = Query $ \pBtree schema ->
-    withIndexCursor pBtree schema idx ReadOnlyMode $ \fn pCursor ->
-    unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
-      res <- alloca $ \pRes -> do
-               checkSqlite3Error $ sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
-               peek pRes
-      if res /= 0
-        then return Done
-        else do alloca $ \pSize -> do
-                  checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
-                  payloadSize <- peek pSize
-                  let size = fromIntegral payloadSize-indexSize
-                  ptr <- mallocBytes size
-                  bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
-                  checkSqlite3Error $ sqlite3BtreeKey pCursor (fromIntegral indexSize) (fromIntegral size) ptr
-                  deserializeKeys bs
+  fromAt = fromAt' deserializeKeys
     where
       deserializeKeys bs =
         case deserializeKey bs of
           Nothing       -> return Done
           Just (key,bs) -> return (Output key (deserializeKeys bs))
 
-  fromIntervalAsc (Index tbl name fn) s e = Query $ \pBtree schema -> do
-    pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 1 1
-    step (start s) pCursor
+  fromIntervalAsc = fromIntervalAsc' deserialize
     where
-      ebs = case e of
-              Including val -> serialize val
-              Excluding val -> serialize val
-              Unbounded     -> error "No end value"
-
-      start (Including val) pCursor pRes =
-        unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
-          rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
-          when (rc == sqlite_OK) $ do res <- peek pRes
-                                      when (res > 0) $ poke pRes 0
-          return rc
-      start (Excluding val) pCursor pRes =
-        unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
-          rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
-          if rc == sqlite_OK
-            then do res <- peek pRes
-                    if res == 0
-                      then sqlite3BtreeNext pCursor pRes
-                      else return rc
-            else return rc
-      start Unbounded pCursor pRes =
-        sqlite3BtreeFirst pCursor pRes
-
-      checkEnd (Including _) pCursor nCell pCell f =
-        unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
-        alloca $ \pRC -> do
-          res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
-          checkSqlite3Error $ peek pRC
-          if res > 0
-            then do sqlite3BtreeCloseCursor pCursor
-                    return Done
-            else f pCursor
-      checkEnd (Excluding _) pCursor nCell pCell f =
-        unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
-        alloca $ \pRC -> do
-          res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
-          checkSqlite3Error $ peek pRC
-          if res >= 0
-            then do sqlite3BtreeCloseCursor pCursor
-                    return Done
-            else f pCursor
-      checkEnd Unbounded     pCursor nCell pCell f = f pCursor
-
-      step moveCursor pCursor = do
-        res <- (alloca $ \pRes -> do
-                  checkSqlite3Error $ moveCursor pCursor pRes
-                  peek pRes)
-               `onException`
-               (sqlite3BtreeCloseCursor pCursor)
-        if res /= 0
-          then do sqlite3BtreeCloseCursor pCursor
-                  return Done
-          else (alloca $ \pSize -> do
-                  checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
-                  payloadSize <- peek pSize
-                  ptr <- mallocBytes (fromIntegral payloadSize)
-                  bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral payloadSize)
-                  checkSqlite3Error $ sqlite3BtreeKey pCursor 0 (fromIntegral payloadSize) ptr
-                  checkEnd e pCursor payloadSize ptr $ \pCursor -> do
-                    let (val,bs') = deserializeIndex bs
-                    deserializeKeys pCursor val bs')
-               `onException`
-               (sqlite3BtreeCloseCursor pCursor)
+      deserialize bs next =
+        let (val,bs') = deserializeIndex bs
+        in deserializeKeys val bs'
         where
-          deserializeKeys pCursor val bs =
+          deserializeKeys val bs =
             case deserializeKey bs of
-              Nothing       -> step sqlite3BtreeNext pCursor
-              Just (key,bs) -> return (Output (val,key) (deserializeKeys pCursor val bs))
+              Nothing       -> next
+              Just (key,bs) -> return (Output (val,key) (deserializeKeys val bs))
 
-  fromIntervalDesc (Index tbl name fn) s e = Query $ \pBtree schema -> do
-    pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 1 1
-    step (start s) pCursor
+  fromIntervalDesc = fromIntervalDesc' deserialize
     where
-      ebs = case e of
-              Including val -> serialize val
-              Excluding val -> serialize val
-              Unbounded     -> error "No end value"
-
-      start (Including val) pCursor pRes =
-        unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
-          rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
-          if rc == sqlite_OK
-            then do res <- peek pRes
-                    if res > 0 
-                      then sqlite3BtreePrevious pCursor pRes
-                      else return rc
-            else return rc
-      start (Excluding val) pCursor pRes =
-        unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
-          rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
-          if rc == sqlite_OK
-            then do res <- peek pRes
-                    if res >= 0
-                      then sqlite3BtreePrevious pCursor pRes
-                      else return rc
-            else return rc
-      start Unbounded pCursor pRes =
-        sqlite3BtreeLast pCursor pRes
-
-      checkEnd (Including _) pCursor nCell pCell f =
-        unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
-        alloca $ \pRC -> do
-          res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
-          checkSqlite3Error $ peek pRC
-          if res < 0
-            then do sqlite3BtreeCloseCursor pCursor
-                    return Done
-            else f pCursor
-      checkEnd (Excluding _) pCursor nCell pCell f =
-        unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
-        alloca $ \pRC -> do
-          res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
-          checkSqlite3Error $ peek pRC
-          if res <= 0
-            then do sqlite3BtreeCloseCursor pCursor
-                    return Done
-            else f pCursor
-      checkEnd Unbounded     pCursor nCell pCell f = f pCursor
-
-      step moveCursor pCursor = do
-        res <- (alloca $ \pRes -> do
-                  checkSqlite3Error $ moveCursor pCursor pRes
-                  peek pRes)
-               `onException`
-               (sqlite3BtreeCloseCursor pCursor)
-        if res /= 0
-          then do sqlite3BtreeCloseCursor pCursor
-                  return Done
-          else (alloca $ \pSize -> do
-                  checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
-                  payloadSize <- peek pSize
-                  ptr <- mallocBytes (fromIntegral payloadSize)
-                  bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral payloadSize)
-                  checkSqlite3Error $ sqlite3BtreeKey pCursor 0 (fromIntegral payloadSize) ptr
-                  checkEnd e pCursor payloadSize ptr $ \pCursor -> do
-                    let (val,bs') = deserializeIndex bs
-                    deserializeKeys pCursor val bs')
-               `onException`
-               (sqlite3BtreeCloseCursor pCursor)
+      deserialize bs next =
+        let (val,bs') = deserializeIndex bs
+        in deserializeKeys val bs'
         where
-          deserializeKeys pCursor val bs =
+          deserializeKeys val bs =
             case deserializeKey bs of
-              Nothing       -> step sqlite3BtreePrevious pCursor
-              Just (key,bs) -> return (Output (val,key) (deserializeKeys pCursor val bs))
+              Nothing       -> next
+              Just (key,bs) -> return (Output (val,key) (deserializeKeys val bs))
 
 fromIndexAt :: (Data a,Data b) => Index a b -> b -> Query (Key a,a)
 fromIndexAt idx x = do key <- fromAt idx x
@@ -744,6 +618,201 @@ fromIndex idx = fromIndexIntervalAsc idx Unbounded Unbounded
 -- | A synonym for 'fromIndexIntervalAsc'
 fromIndexInterval :: (Data a,Data b) => Index a b -> IntervalBoundry b -> IntervalBoundry b -> Query (Key a,a,b)
 fromIndexInterval = fromIndexIntervalAsc
+
+fromList :: (Data a,Data b) => Index a b -> Query (b,[Key a])
+fromList idx = fromIntervalAscList idx Unbounded Unbounded
+
+-- | A synonym for 'fromIndexIntervalAsc'
+fromIntervalList :: (Data a,Data b) => Index a b -> IntervalBoundry b -> IntervalBoundry b -> Query (b,[Key a])
+fromIntervalList = fromIntervalAscList
+
+fromIntervalAscList :: (Data a,Data b) => Index a b -> IntervalBoundry b -> IntervalBoundry b -> Query (b,[Key a])
+fromIntervalAscList = fromIntervalAsc' deserialize
+  where
+    deserialize bs next = do
+      let (val,bs') = deserializeIndex bs
+      return (Output (val,deserializeKeys bs') next)
+      where
+        deserializeKeys bs =
+          case deserializeKey bs of
+            Nothing       -> []
+            Just (key,bs) -> key : deserializeKeys bs
+
+fromIntervalDescList :: (Data a,Data b) => Index a b -> IntervalBoundry b -> IntervalBoundry b -> Query (b,[Key a])
+fromIntervalDescList = fromIntervalDesc' deserialize
+  where
+    deserialize bs next = do
+      let (val,bs') = deserializeIndex bs
+      return (Output (val,deserializeKeys bs') next)
+      where
+        deserializeKeys bs =
+          case deserializeKey bs of
+            Nothing       -> []
+            Just (key,bs) -> key : deserializeKeys bs
+
+fromAtList :: (Data a,Data b) => Index a b -> b -> Query [Key a]
+fromAtList = fromAt' deserialize
+  where
+    deserialize bs = return (Output (deserializeKeys bs) (return Done))
+
+    deserializeKeys bs =
+      case deserializeKey bs of
+        Nothing       -> []
+        Just (key,bs) -> key : deserializeKeys bs
+
+fromAt' deserialize idx val = Query $ \pBtree schema ->
+    withIndexCursor pBtree schema idx ReadOnlyMode $ \fn pCursor ->
+    unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
+      res <- alloca $ \pRes -> do
+               checkSqlite3Error $ sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+               peek pRes
+      if res /= 0
+        then return Done
+        else do alloca $ \pSize -> do
+                  checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
+                  payloadSize <- peek pSize
+                  let size = fromIntegral payloadSize-indexSize
+                  ptr <- mallocBytes size
+                  bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
+                  checkSqlite3Error $ sqlite3BtreeKey pCursor (fromIntegral indexSize) (fromIntegral size) ptr
+                  deserialize bs
+
+fromIntervalAsc' deserialize (Index tbl name fn) s e = Query $ \pBtree schema -> do
+  pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 1 1
+  step (start s) pCursor
+  where
+    ebs = case e of
+            Including val -> serialize val
+            Excluding val -> serialize val
+            Unbounded     -> error "No end value"
+
+    start (Including val) pCursor pRes =
+      unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
+        rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+        when (rc == sqlite_OK) $ do res <- peek pRes
+                                    when (res > 0) $ poke pRes 0
+        return rc
+    start (Excluding val) pCursor pRes =
+      unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
+        rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+        if rc == sqlite_OK
+          then do res <- peek pRes
+                  if res == 0
+                    then sqlite3BtreeNext pCursor pRes
+                    else return rc
+          else return rc
+    start Unbounded pCursor pRes =
+      sqlite3BtreeFirst pCursor pRes
+
+    checkEnd (Including _) pCursor nCell pCell f =
+      unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
+      alloca $ \pRC -> do
+        res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
+        checkSqlite3Error $ peek pRC
+        if res > 0
+          then do sqlite3BtreeCloseCursor pCursor
+                  return Done
+          else f pCursor
+    checkEnd (Excluding _) pCursor nCell pCell f =
+      unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
+      alloca $ \pRC -> do
+        res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
+        checkSqlite3Error $ peek pRC
+        if res >= 0
+          then do sqlite3BtreeCloseCursor pCursor
+                  return Done
+          else f pCursor
+    checkEnd Unbounded     pCursor nCell pCell f = f pCursor
+
+    step moveCursor pCursor = do
+      res <- (alloca $ \pRes -> do
+                checkSqlite3Error $ moveCursor pCursor pRes
+                peek pRes)
+             `onException`
+             (sqlite3BtreeCloseCursor pCursor)
+      if res /= 0
+        then do sqlite3BtreeCloseCursor pCursor
+                return Done
+        else (alloca $ \pSize -> do
+                checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
+                payloadSize <- peek pSize
+                ptr <- mallocBytes (fromIntegral payloadSize)
+                bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral payloadSize)
+                checkSqlite3Error $ sqlite3BtreeKey pCursor 0 (fromIntegral payloadSize) ptr
+                checkEnd e pCursor payloadSize ptr $ \pCursor -> do
+                  deserialize bs (step sqlite3BtreeNext pCursor))
+             `onException`
+             (sqlite3BtreeCloseCursor pCursor)
+
+fromIntervalDesc' deserialize (Index tbl name fn) s e = Query $ \pBtree schema -> do
+  pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 1 1
+  step (start s) pCursor
+  where
+    ebs = case e of
+            Including val -> serialize val
+            Excluding val -> serialize val
+            Unbounded     -> error "No end value"
+
+    start (Including val) pCursor pRes =
+      unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
+        rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+        if rc == sqlite_OK
+          then do res <- peek pRes
+                  if res > 0 
+                    then sqlite3BtreePrevious pCursor pRes
+                    else return rc
+          else return rc
+    start (Excluding val) pCursor pRes =
+      unsafeUseAsCStringLen (serialize val) $ \(indexPtr,indexSize) -> do
+        rc <- sqlite3BtreeMoveTo pCursor (castPtr indexPtr) (fromIntegral indexSize) 0 pRes
+        if rc == sqlite_OK
+          then do res <- peek pRes
+                  if res >= 0
+                    then sqlite3BtreePrevious pCursor pRes
+                    else return rc
+          else return rc
+    start Unbounded pCursor pRes =
+      sqlite3BtreeLast pCursor pRes
+
+    checkEnd (Including _) pCursor nCell pCell f =
+      unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
+      alloca $ \pRC -> do
+        res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
+        checkSqlite3Error $ peek pRC
+        if res < 0
+          then do sqlite3BtreeCloseCursor pCursor
+                  return Done
+          else f pCursor
+    checkEnd (Excluding _) pCursor nCell pCell f =
+      unsafeUseAsCStringLen ebs $ \(pKey,_) -> do
+      alloca $ \pRC -> do
+        res <- sqlite3BtreeRecordCompare nCell pCell (castPtr pKey) pRC
+        checkSqlite3Error $ peek pRC
+        if res <= 0
+          then do sqlite3BtreeCloseCursor pCursor
+                  return Done
+          else f pCursor
+    checkEnd Unbounded     pCursor nCell pCell f = f pCursor
+
+    step moveCursor pCursor = do
+      res <- (alloca $ \pRes -> do
+                checkSqlite3Error $ moveCursor pCursor pRes
+                peek pRes)
+             `onException`
+             (sqlite3BtreeCloseCursor pCursor)
+      if res /= 0
+        then do sqlite3BtreeCloseCursor pCursor
+                return Done
+        else (alloca $ \pSize -> do
+                checkSqlite3Error $ sqlite3BtreeKeySize pCursor pSize
+                payloadSize <- peek pSize
+                ptr <- mallocBytes (fromIntegral payloadSize)
+                bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral payloadSize)
+                checkSqlite3Error $ sqlite3BtreeKey pCursor 0 (fromIntegral payloadSize) ptr
+                checkEnd e pCursor payloadSize ptr $ \pCursor -> do
+                  deserialize bs (step sqlite3BtreePrevious pCursor))
+             `onException`
+             (sqlite3BtreeCloseCursor pCursor)
 
 -----------------------------------------------------------------
 -- Insert
