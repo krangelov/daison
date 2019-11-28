@@ -1,11 +1,11 @@
 {-# LANGUAGE ExistentialQuantification, TypeFamilies, MultiParamTypeClasses #-}
-module Database.Helda
+module Database.Daison
             ( Database, openDB, closeDB
             , Key
             , Table, table
             , Index, index, listIndex, maybeIndex, withIndex
             , indexedTable, applyIndex
-            , runHelda, AccessMode(..), Helda
+            , runDaison, AccessMode(..), Daison
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
@@ -33,8 +33,8 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.IO.Class
 
-import Database.Helda.FFI
-import Database.Helda.Serialize
+import Database.Daison.FFI
+import Database.Daison.Serialize
 
 -----------------------------------------------------------------
 -- Access the database
@@ -112,15 +112,15 @@ closeDB (Database pBtree _) = do
 -- The monad
 -----------------------------------------------------------------
 
-newtype Helda a = Helda {doTransaction :: Database -> IO a}
+newtype Daison a = Daison {doTransaction :: Database -> IO a}
 
 data AccessMode = ReadWriteMode | ReadOnlyMode
 
 toCMode ReadWriteMode = 1
 toCMode ReadOnlyMode  = 0
 
-runHelda :: Database -> AccessMode -> Helda a -> IO a
-runHelda db@(Database pBtree schemaRef) m t =
+runDaison :: Database -> AccessMode -> Daison a -> IO a
+runDaison db@(Database pBtree schemaRef) m t =
   (do checkSqlite3Error $ sqlite3BtreeBeginTrans pBtree (toCMode m)
       r <- doTransaction t db
       checkSqlite3Error $ sqlite3BtreeCommit pBtree
@@ -128,19 +128,19 @@ runHelda db@(Database pBtree schemaRef) m t =
   `onException`
   (checkSqlite3Error $ sqlite3BtreeRollback pBtree sqlite_ABORT_ROLLBACK 0)
 
-instance Functor Helda where
-  fmap f (Helda m) = Helda (\db -> fmap f (m db))
+instance Functor Daison where
+  fmap f (Daison m) = Daison (\db -> fmap f (m db))
 
-instance Applicative Helda where
-  pure x  = Helda (\db -> pure x)
-  f <*> g = Helda (\db -> doTransaction f db <*> doTransaction g db)
+instance Applicative Daison where
+  pure x  = Daison (\db -> pure x)
+  f <*> g = Daison (\db -> doTransaction f db <*> doTransaction g db)
 
-instance Monad Helda where
-  return x = Helda (\db -> return x)
-  f >>= g  = Helda (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
+instance Monad Daison where
+  return x = Daison (\db -> return x)
+  f >>= g  = Daison (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
 
-instance MonadIO Helda where
-  liftIO f = Helda (\db -> f)
+instance MonadIO Daison where
+  liftIO f = Daison (\db -> f)
 
 -----------------------------------------------------------------
 -- Access the tables
@@ -152,12 +152,12 @@ data Table a   = Table String [(String,a -> [ByteString])]
 table :: String -> Table a
 table name = Table name []
 
-createTable :: Table a -> Helda ()
-createTable (Table name indices) = Helda $ \db ->
+createTable :: Table a -> Daison ()
+createTable (Table name indices) = Daison $ \db ->
   createTableHelper db name indices True
 
-tryCreateTable :: Table a -> Helda ()
-tryCreateTable (Table name indices) = Helda $ \db ->
+tryCreateTable :: Table a -> Daison ()
+tryCreateTable (Table name indices) = Daison $ \db ->
   createTableHelper db name indices False
 
 createTableHelper (Database pBtree schemaRef) name indices doFail = do
@@ -190,12 +190,12 @@ createTableHelper (Database pBtree schemaRef) name indices doFail = do
                         sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                       return (key+1,Map.insert name (key,tnum) schema)
 
-dropTable :: Table a -> Helda ()
-dropTable (Table name indices) = Helda $ \db ->
+dropTable :: Table a -> Daison ()
+dropTable (Table name indices) = Daison $ \db ->
   dropTableHelper db name indices False
 
-tryDropTable :: Table a -> Helda ()
-tryDropTable (Table name indices) = Helda $ \db ->
+tryDropTable :: Table a -> Daison ()
+tryDropTable (Table name indices) = Daison $ \db ->
   dropTableHelper db name indices True
 
 dropTableHelper (Database pBtree schemaRef) name indices doFail = do
@@ -223,8 +223,8 @@ dropTableHelper (Database pBtree schemaRef) name indices doFail = do
         checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
       checkSqlite3Error $ sqlite3BtreeDelete pCursor 0
 
-alterTable :: (Data a, Data b) => Table a -> Table b -> (a -> b) -> Helda ()
-alterTable tbl@(Table name _) (Table name' _) f = Helda $ \(Database pBtree schemaRef) -> do
+alterTable :: (Data a, Data b) => Table a -> Table b -> (a -> b) -> Daison ()
+alterTable tbl@(Table name _) (Table name' _) f = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   case Map.lookup name schema of
     Nothing         -> throwDoesn'tExist name
@@ -274,8 +274,8 @@ alterTable tbl@(Table name _) (Table name' _) f = Helda $ \(Database pBtree sche
                     checkSqlite3Error $ sqlite3BtreeInsert pDstCursor nullPtr key (castPtr ptr') (fromIntegral size') 0 0 0
                 step sqlite3BtreeNext pSrcCursor pDstCursor
 
-renameTable :: Table a -> String -> Helda ()
-renameTable (Table name _) name' = Helda $ \(Database pBtree schemaRef) -> do
+renameTable :: Table a -> String -> Daison ()
+renameTable (Table name _) name' = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   case Map.lookup name schema of
     Nothing         -> throwDoesn'tExist name
@@ -393,8 +393,8 @@ instance MonadPlus Query where
   mplus f g = Query (\pBtree schema -> do r <- doQuery f pBtree schema
                                           appendQSeq id r (doQuery g pBtree schema))
 
-select :: Query a -> Helda [a]
-select q = Helda $ \(Database pBtree schemaRef) -> do
+select :: Query a -> Daison [a]
+select q = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   seq <- doQuery q pBtree schema
   loop seq
@@ -782,8 +782,8 @@ fromInterval' deserialize (Index tbl name fn) (Restriction s e order) = Query $ 
 -- Insert
 -----------------------------------------------------------------
 
-insert :: Data a => Table a -> a -> Helda (Key a)
-insert tbl val = Helda $ \(Database pBtree schemaRef) -> do
+insert :: Data a => Table a -> a -> Daison (Key a)
+insert tbl val = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   key <- withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
            res <- alloca $ \pRes -> do
@@ -800,8 +800,8 @@ insert tbl val = Helda $ \(Database pBtree schemaRef) -> do
   insertIndices pBtree schema tbl key val
   return key
 
-insertSelect :: Data a => Table a -> Query a -> Helda (Key a,Key a)
-insertSelect tbl q = Helda $ \(Database pBtree schemaRef) -> do
+insertSelect :: Data a => Table a -> Query a -> Daison (Key a,Key a)
+insertSelect tbl q = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
     res <- alloca $ \pRes -> do
@@ -848,16 +848,16 @@ insertIndices pBtree schema tbl key val =
 -- Update
 -----------------------------------------------------------------
 
-store :: Data a => Table a -> Key a -> a -> Helda ()
-store tbl key val = Helda $ \(Database pBtree schemaRef) -> do
+store :: Data a => Table a -> Key a -> a -> Daison ()
+store tbl key val = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor ->
     unsafeUseAsCStringLen (serialize val) $ \(ptr,size) -> do
       checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
   insertIndices pBtree schema tbl key val
 
-update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Helda [(Key a,a)]
-update tbl f q = Helda $ \(Database pBtree schemaRef) -> do
+update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Daison [(Key a,a)]
+update tbl f q = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
      seq <- doQuery q pBtree schema
@@ -870,8 +870,8 @@ update tbl f q = Helda $ \(Database pBtree schemaRef) -> do
                                          ys <- r >>= loop pCursor
                                          return ((key,y):ys)
 
-update_ :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Helda ()
-update_ tbl f q = Helda $ \(Database pBtree schemaRef) -> do
+update_ :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Daison ()
+update_ tbl f q = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
      seq <- doQuery q pBtree schema

@@ -1,4 +1,4 @@
-module Database.Helda.FFI where
+module Database.Daison.FFI where
 
 import Foreign
 import Foreign.C

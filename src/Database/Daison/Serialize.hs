@@ -1,6 +1,6 @@
 {-# LANGUAGE BinaryLiterals #-}
-module Database.Helda.Serialize(serialize,deserialize,
-                                serializeKey, deserializeKey, deserializeIndex) where
+module Database.Daison.Serialize(serialize,deserialize,
+                                 serializeKey, deserializeKey, deserializeIndex) where
 
 import Data.Int(Int64)
 import Data.Bits
