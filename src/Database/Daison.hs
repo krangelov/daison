@@ -192,11 +192,11 @@ createTableHelper (Database pBtree schemaRef) name indices doFail = do
 
 dropTable :: Table a -> Daison ()
 dropTable (Table name indices) = Daison $ \db ->
-  dropTableHelper db name indices False
+  dropTableHelper db name indices True
 
 tryDropTable :: Table a -> Daison ()
 tryDropTable (Table name indices) = Daison $ \db ->
-  dropTableHelper db name indices True
+  dropTableHelper db name indices False
 
 dropTableHelper (Database pBtree schemaRef) name indices doFail = do
   schema <- fetchSchema pBtree schemaRef
