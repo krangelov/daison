@@ -1,5 +1,5 @@
 {-# LANGUAGE MonadComprehensions #-}
-import Database.Helda
+import Database.Daison
 import System.Environment
 
 people_name :: Index (String,Int) String
@@ -11,13 +11,13 @@ people = table "people"
 
 main = do
   db <- openDB "test.db"
-  x <- runHelda db ReadWriteMode $ do
+  x <- runDaison db ReadWriteMode $ do
          --dropTable people
          tryCreateTable people
          insert people ("Aga",15)
          insert people ("Henry",22)
          --update people2 (\_ (name,age,x) -> (name,age,10))
            --             (from people2)
-         select [x | x <- from people]
+         select [x | x <- from people everything]
   print x
   closeDB db
