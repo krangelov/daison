@@ -61,10 +61,10 @@ serializeM =
       mapM_ serializeM xs
 
     serializeFloat :: Float -> Put
-    serializeFloat f = putTag tag_float >> put f
+    serializeFloat f = putTag tag_float >> putFloatbe f
 
     serializeDouble :: Double -> Put
-    serializeDouble f = putTag tag_double >> put f
+    serializeDouble f = putTag tag_double >> putDoublebe f
 
 putTag :: Tag -> Put
 putTag (Tag tag tbits _) = putWord8 tag
@@ -139,10 +139,10 @@ deserializeM =
     deserializeChar = getTag tag_char >> get
 
     deserializeFloat :: Get Float
-    deserializeFloat = getTag tag_float >> get
+    deserializeFloat = getTag tag_float >> getFloatbe
 
     deserializeDouble :: Get Double
-    deserializeDouble = getTag tag_double >> get
+    deserializeDouble = getTag tag_double >> getDoublebe
     
     deserializeRational :: Get Rational
     deserializeRational = getTag tag_rational >> get

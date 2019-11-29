@@ -7,7 +7,7 @@ library
   exposed-modules:     Database.Daison
   other-modules:       Database.Daison.FFI
                        Database.Daison.Serialize
-  build-depends:       base >=4.3, binary, syb, bytestring, containers
+  build-depends:       base >=4.3, binary >= 0.8.4.0, syb, bytestring, containers
   default-language:    Haskell2010
   build-tools:         hsc2hs
   c-sources:           src/sqlite3Btree.c
