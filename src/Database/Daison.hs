@@ -856,29 +856,28 @@ store tbl key val = Daison $ \(Database pBtree schemaRef) -> do
       checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
   insertIndices pBtree schema tbl key val
 
-update :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Daison [(Key a,a)]
-update tbl f q = Daison $ \(Database pBtree schemaRef) -> do
+update :: Data a => Table a -> Query (Key a,a) -> Daison [(Key a,a)]
+update tbl q = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
      seq <- doQuery q pBtree schema
      loop pCursor seq
   where
-    loop pCursor Done               = return []
-    loop pCursor (Output (key,x) r) = do let y = f key x
-                                         unsafeUseAsCStringLen (serialize y) $ \(ptr,size) -> do
+    loop pCursor Done                 = return []
+    loop pCursor (Output p@(key,x) r) = unsafeUseAsCStringLen (serialize x) $ \(ptr,size) -> do
                                            checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
-                                         ys <- r >>= loop pCursor
-                                         return ((key,y):ys)
+                                           ps <- r >>= loop pCursor
+                                           return (p:ps)
 
-update_ :: Data a => Table a -> (Key a -> b -> a) -> Query (Key a,b) -> Daison ()
-update_ tbl f q = Daison $ \(Database pBtree schemaRef) -> do
+update_ :: Data a => Table a -> Query (Key a,a) -> Daison ()
+update_ tbl q = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   withTableCursor pBtree schema tbl ReadWriteMode $ \pCursor -> do
      seq <- doQuery q pBtree schema
      loop pCursor seq
   where
     loop pCursor Done               = return ()
-    loop pCursor (Output (key,x) r) = do unsafeUseAsCStringLen (serialize (f key x)) $ \(ptr,size) -> do
+    loop pCursor (Output (key,x) r) = do unsafeUseAsCStringLen (serialize x) $ \(ptr,size) -> do
                                            checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                                          r >>= loop pCursor
 
