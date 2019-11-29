@@ -41034,6 +41034,31 @@ utf8Decode(const unsigned char** p)
 	return u;
 }
 
+SQLITE_PRIVATE double
+getFloatBE(const unsigned char** p)
+{
+	u32 u = 0;
+	for (int i = 0; i < 4; i++) {
+		u = u << 8 | *p[i];
+	}
+	*p += 4;
+
+	return *((float*) &u);
+}
+
+SQLITE_PRIVATE double
+getDoubleBE(const unsigned char** p)
+{
+	u64 u = 0;
+	for (int i = 0; i < 8; i++) {
+		u = u << 8 | *p[i];
+	}
+	*p += 8;
+
+	return *((double*) &u);
+}
+
+
 SQLITE_PRIVATE i64 sqlite3BtreeRecordCompareHelper(
   i64 nCell, const unsigned char** pCell, const unsigned char** pKey, int* errCode)
 {
@@ -41116,7 +41141,20 @@ SQLITE_PRIVATE i64 sqlite3BtreeRecordCompareHelper(
 			res = (idx1 - idx2);
 			if (res != 0)
 				return res;
-			break;
+
+			while (**pCell != 0b00111 && **pKey != 0b00111) {
+				res = sqlite3BtreeRecordCompareHelper(pCellEnd-pCell,pCell,pKey,errCode);
+				if (res != 0)
+					return res;
+			}
+			if (**pCell != 0b00111 || **pKey != 0b00111) {
+				*errCode = SQLITE_CORRUPT;
+				return 1;
+			}
+			*pCell++;
+			*pKey++;
+
+			return 0;
 		}
 		default:
 			res = (c & 0b111 - d & 0b111);
@@ -41124,22 +41162,99 @@ SQLITE_PRIVATE i64 sqlite3BtreeRecordCompareHelper(
 				return res;
 
 			switch (c & 0b111111) {
-			case 0b000111:  // an args-end
-				break;
-			case 0b001111:  // a float
-				break;
-			case 0b010111:  // a double
-				break;
-			case 0b011111:  // a rational
-				break;
-			case 0b100111:  // a char
-				break;
-			case 0b101111:  // an integer list
-				break;
-			case 0b110111:  // a list of floats
-				break;
-			case 0b111111:  // a list of doubles
-				break;
+			case 0b000111:   // an args-end
+				return 0;
+			case 0b001111: { // a float
+				float x = getFloatBE(pCell);
+				float y = getFloatBE(pKey);
+
+				if (pCell > pCellEnd) {
+					*errCode = SQLITE_CORRUPT;
+				}
+
+				return (x > y) - (x < y);
+			}
+			case 0b010111: { // a double
+				double x = getDoubleBE(pCell);
+				double y = getDoubleBE(pKey);
+
+				if (pCell > pCellEnd) {
+					*errCode = SQLITE_CORRUPT;
+				}
+
+				return (x > y) - (x < y);
+			}
+			case 0b011111: { // a rational
+				*errCode = SQLITE_INTERNAL;
+				return 0;
+			}
+			case 0b100111: { // a char
+				u64 ch1 = utf8Decode(pCell);
+				u64 ch2 = utf8Decode(pKey);
+
+				if (pCell > pCellEnd) {
+					*errCode = SQLITE_CORRUPT;
+				}
+
+				return (ch1 - ch2);
+			}
+			case 0b101111: { // an integer list
+				i64 len1 = getVInt(pCell,2,c);
+				i64 len2 = getVInt(pKey, 2,d);
+
+				while (len1 > 0 && len2 > 0) {
+					int x = getVInt(pCell, 0, 0); len1--;
+					int y = getVInt(pKey,  0, 0);  len2--;
+
+					if (pCell > pCellEnd) {
+						*errCode = SQLITE_CORRUPT;
+						return 1;
+					}
+
+					res = (x - y);
+					if (res != 0)
+						return res;
+				}
+				return (len1 - len2);
+			}
+			case 0b110111: { // a list of floats
+				i64 len1 = getVInt(pCell,2,c);
+				i64 len2 = getVInt(pKey, 2,d);
+
+				while (len1 > 0 && len2 > 0) {
+					float x = getFloatBE(pCell); len1--;
+					float y = getFloatBE(pKey);  len2--;
+
+					if (pCell > pCellEnd) {
+						*errCode = SQLITE_CORRUPT;
+						return 1;
+					}
+
+					res = (x - y);
+					if (res != 0)
+						return res;
+				}
+				return (len1 - len2);
+			}
+			case 0b111111: { // a list of doubles
+				i64 len1 = getVInt(pCell,2,c);
+				i64 len2 = getVInt(pKey, 2,d);
+
+				while (len1 > 0 && len2 > 0) {
+					double x = getDoubleBE(pCell); len1--;
+					double y = getDoubleBE(pKey);  len2--;
+
+					if (pCell > pCellEnd) {
+						*errCode = SQLITE_CORRUPT;
+						return 1;
+					}
+
+					res = (x - y);
+					if (res != 0)
+						return res;
+				}
+				return (len1 - len2);
+			}
 			default:
 				*errCode = SQLITE_CORRUPT;
 				return 1;
