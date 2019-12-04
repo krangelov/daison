@@ -7,4 +7,4 @@ simple key-value storage. On top of that there is a Haskell API
 which replaces the SQL language. For instance, Queries are simple 
 list comprehensions generalized to a special monad.
 
-For more details check the [Wiki|https://github.com/krangelov/daison/wiki].
+For more details check the [Wiki](https://github.com/krangelov/daison/wiki).
