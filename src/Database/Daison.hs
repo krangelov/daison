@@ -282,8 +282,8 @@ alterTable tbl@(Table name _ _) (Table name' _ _) f = Daison $ \(Database pBtree
                     checkSqlite3Error $ sqlite3BtreeInsert pDstCursor nullPtr key (castPtr ptr') (fromIntegral size') 0 0 0
                 step sqlite3BtreeNext pSrcCursor pDstCursor
 
-renameTable :: Table a -> String -> Daison ()
-renameTable (Table name _ _) name' = Daison $ \(Database pBtree schemaRef) -> do
+renameTable :: Table a -> String -> Daison (Table a)
+renameTable (Table name indices triggers) name' = Daison $ \(Database pBtree schemaRef) -> do
   schema <- fetchSchema pBtree schemaRef
   case Map.lookup name schema of
     Nothing         -> throwDoesn'tExist name
@@ -296,7 +296,7 @@ renameTable (Table name _ _) name' = Daison $ \(Database pBtree schemaRef) -> do
                                   (\pCursor -> unsafeUseAsCStringLen (serialize (name',tnum)) $ \(ptr,size) -> do
                                                  sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0)
                           updateSchema pBtree schemaRef (Map.insert name' (key,tnum) (Map.delete name schema))
-                          return ()
+                          return (Table name' indices triggers)
 
 
 openBtreeCursor pBtree schema name m n x =
