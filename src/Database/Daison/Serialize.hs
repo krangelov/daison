@@ -1,6 +1,7 @@
 {-# LANGUAGE BinaryLiterals #-}
 module Database.Daison.Serialize(serialize,deserialize,
-                                 serializeKey, deserializeKey, deserializeIndex) where
+                                 serializeKey, serializeKeys,
+                                 deserializeKey, deserializeIndex) where
 
 import Data.Int(Int64)
 import Data.Bits
@@ -81,6 +82,9 @@ putVInt n (Tag tag tbits _) =
 
 serializeKey :: Int64 -> ByteString
 serializeKey = toStrict . runPut . putRest . fromIntegral
+
+serializeKeys :: [Int64] -> ByteString
+serializeKeys = toStrict . runPut . mapM_ (putRest . fromIntegral)
 
 -- specialized version without tag bits
 putRest :: Integer -> Put
