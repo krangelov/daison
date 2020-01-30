@@ -1,15 +1,22 @@
 {-# LANGUAGE TypeFamilies, MultiParamTypeClasses, BangPatterns #-}
 module Database.Daison
             ( Database, openDB, closeDB
+
+            , runDaison, AccessMode(..), Daison
+
             , Key
             , Table, table, tableName
             , Index, index, listIndex, maybeIndex, withIndex
             , indexedTable, applyIndex
-            , runDaison, AccessMode(..), Daison
             , createTable, tryCreateTable
             , dropTable, tryDropTable
             , alterTable, renameTable
             , withForeignKey, withCascadeDelete, withCascadeUpdate
+            
+            , DataSet, dataset, datasetName
+            , createDataSet, tryCreateDataSet
+            , dropDataSet, tryDropDataSet
+            , insertData, deleteData
 
             , Query
             , select, query, anyOf
@@ -172,13 +179,13 @@ tableName (Table name _ _) = name
 
 createTable :: Table a -> Daison ()
 createTable (Table name indices _) = Daison $ \db ->
-  createTableHelper db name indices True
+  createTableHelper db btreeINTKEY name indices True
 
 tryCreateTable :: Table a -> Daison ()
 tryCreateTable (Table name indices _) = Daison $ \db ->
-  createTableHelper db name indices False
+  createTableHelper db btreeINTKEY name indices False
 
-createTableHelper (Database pBtree schemaRef) name indices doFail = do
+createTableHelper (Database pBtree schemaRef) keyType name indices doFail = do
   schema <- fetchSchema pBtree schemaRef
   bracket (alloca $ \ppCursor -> do
              checkSqlite3Error $ sqlite3BtreeCursor pBtree 1 1 0 0 ppCursor
@@ -192,7 +199,7 @@ createTableHelper (Database pBtree schemaRef) name indices doFail = do
                                    else alloca $ \pKey -> do
                                           checkSqlite3Error $ sqlite3BtreeKeySize pCursor pKey
                                           fmap (+1) (peek pKey)
-                          key_schema <- mkTable name btreeINTKEY pCursor key schema
+                          key_schema <- mkTable name keyType pCursor key schema
                           (key,schema) <- foldM (\(key,schema) (name,_) -> mkTable name btreeBLOBKEY pCursor key schema) key_schema indices
                           updateSchema pBtree schemaRef schema)
   where
@@ -419,6 +426,46 @@ withCascadeUpdate (Table tname indices fkeys) (index,f) = Table tname indices (c
                                     checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                                   insertIndices pBtree schema tbl key val'
                                 updateForeign pCursor bs
+
+-----------------------------------------------------------------
+-- Access the Data Sets
+-----------------------------------------------------------------
+
+newtype DataSet a = DataSet {datasetName :: String}
+
+dataset = DataSet
+
+createDataSet :: DataSet a -> Daison ()
+createDataSet (DataSet name) = Daison $ \db ->
+  createTableHelper db btreeBLOBKEY name [] True
+
+tryCreateDataSet :: DataSet a -> Daison ()
+tryCreateDataSet (DataSet name) = Daison $ \db ->
+  createTableHelper db btreeBLOBKEY name [] False
+
+dropDataSet :: DataSet a -> Daison ()
+dropDataSet (DataSet name) = Daison $ \db ->
+  dropTableHelper db name [] True
+
+tryDropDataSet :: DataSet a -> Daison ()
+tryDropDataSet (DataSet name) = Daison $ \db ->
+  dropTableHelper db name [] False
+
+renameDataSet :: DataSet a -> String -> Daison (DataSet a)
+renameDataSet (DataSet name) name' = Daison $ \(Database pBtree schemaRef) -> do
+  schema <- fetchSchema pBtree schemaRef
+  case Map.lookup name schema of
+    Nothing         -> throwDoesn'tExist name
+    Just (key,tnum) -> do when (name /= name' && Map.member name' schema) $
+                            throwAlreadyExists name'
+                          bracket (alloca $ \ppCursor -> do
+                                     checkSqlite3Error $ sqlite3BtreeCursor pBtree 1 1 0 0 ppCursor
+                                     peek ppCursor)
+                                  (\pCursor -> checkSqlite3Error $ sqlite3BtreeCloseCursor pCursor)
+                                  (\pCursor -> unsafeUseAsCStringLen (serialize (name',tnum)) $ \(ptr,size) -> do
+                                                 sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0)
+                          updateSchema pBtree schemaRef (Map.insert name' (key,tnum) (Map.delete name schema))
+                          return (DataSet name')
 
 -----------------------------------------------------------------
 -- Queries
@@ -767,7 +814,7 @@ instance Data b => From (Index a b) Restriction where
   type K (Index a b)             = b
   type V (Index a b) Restriction = (b,Key a)
 
-  from idx x = Query (fromInterval' deserialize idx x)
+  from (Index tbl name fn) x = Query (fromInterval' deserialize name x)
     where
       deserialize bs next done =
         let (val,bs') = deserializeIndex bs
@@ -777,6 +824,16 @@ instance Data b => From (Index a b) Restriction where
             case deserializeKey bs of
               Nothing       -> next
               Just (key,bs) -> return (Output (val,key) (deserializeKeys val bs) done)
+
+instance Data a => From (DataSet a) Restriction where
+  type K (DataSet a)             = a
+  type V (DataSet a) Restriction = a
+
+  from (DataSet name) x = Query (fromInterval' deserialize name x)
+    where
+      deserialize bs next done =
+        let (val,bs') = deserializeIndex bs
+        in return (Output val next done)
 
 class FromIndex (r :: * -> *) where
   type VI r a b
@@ -810,7 +867,7 @@ instance FromIndex Restriction where
                        dval       <- from (indexedTable idx) (at key)
                        return (key,dval,ival)
 
-  fromList idx x = Query (fromInterval' deserialize idx x)
+  fromList (Index tbl name fn) x = Query (fromInterval' deserialize name x)
     where
       deserialize bs next done = do
         let (val,bs') = deserializeIndex bs
@@ -838,7 +895,7 @@ fromAt' deserialize idx (At val) = \pBtree schema ->
                   checkSqlite3Error $ sqlite3BtreeKey pCursor (fromIntegral indexSize) (fromIntegral size) ptr
                   deserialize bs
 
-fromInterval' deserialize (Index tbl name fn) (Restriction s e order) = \pBtree schema -> do
+fromInterval' deserialize name (Restriction s e order) = \pBtree schema -> do
   pCursor <- openBtreeCursor pBtree schema name ReadOnlyMode 1 1
   step (start s) pCursor
   where
@@ -1002,6 +1059,22 @@ store tbl mb_key val = Daison $ \(Database pBtree schemaRef) -> do
   return key
 
 -----------------------------------------------------------------
+-- Insert in a DataSet
+-----------------------------------------------------------------
+
+insertData :: Data a => DataSet a -> a -> Daison ()
+insertData (DataSet name) val = Daison $ \(Database pBtree schemaRef) -> do
+  schema <- fetchSchema pBtree schemaRef
+  bracket (openBtreeCursor pBtree schema name ReadWriteMode 1 1)
+          (closeBtreeCursor)
+          (\pCursor -> unsafeUseAsCStringLen (serialize val) $ \(valPtr,valSize) -> do
+             res <- alloca $ \pRes -> do
+                      checkSqlite3Error $ sqlite3BtreeMoveTo pCursor (castPtr valPtr) (fromIntegral valSize) 0 pRes
+                      peek pRes
+             when (res /= 0) $
+               checkSqlite3Error $ sqlite3BtreeInsert pCursor (castPtr valPtr) (fromIntegral valSize) nullPtr 0 0 0 0)
+
+-----------------------------------------------------------------
 -- Update
 -----------------------------------------------------------------
 
@@ -1115,6 +1188,23 @@ deleteIndices pBtree schema tbl key pCursor = do
       case deserializeKey bs of
         Nothing       -> []
         Just (key,bs) -> key : deserializeKeys bs
+
+
+-----------------------------------------------------------------
+-- Delete from DataSet
+-----------------------------------------------------------------
+
+deleteData :: Data a => DataSet a -> a -> Daison ()
+deleteData (DataSet name) val = Daison $ \db@(Database pBtree schemaRef) -> do
+  schema <- fetchSchema pBtree schemaRef
+  bracket (openBtreeCursor pBtree schema name ReadWriteMode 1 1)
+          (closeBtreeCursor)
+          (\pCursor -> unsafeUseAsCStringLen (serialize val) $ \(valPtr,valSize) -> do
+             res <- alloca $ \pRes -> do
+                      checkSqlite3Error $ sqlite3BtreeMoveTo pCursor (castPtr valPtr) (fromIntegral valSize) 0 pRes
+                      peek pRes
+             when (res == 0) $
+               checkSqlite3Error $ sqlite3BtreeDelete pCursor 0)
 
 
 -----------------------------------------------------------------
