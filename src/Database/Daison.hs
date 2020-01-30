@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification, TypeFamilies, MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies, MultiParamTypeClasses, BangPatterns #-}
 module Database.Daison
             ( Database, openDB, closeDB
             , Key
@@ -10,10 +10,18 @@ module Database.Daison
             , dropTable, tryDropTable
             , alterTable, renameTable
             , withForeignKey, withCascadeDelete, withCascadeUpdate
+
             , Query
-            , select, anyOf, listAll
-            , foldlQ, foldl1Q, foldrQ
-            , groupQ
+            , select, query, anyOf
+
+            , Aggregator
+            , listRows, distinctRows
+            , firstRow, lastRow, topRows, bottomRows
+            , foldRows, foldRows1
+            , groupRows, groupRowsWith, groupRowsBy
+            , sortRows,  sortRowsBy
+            , sumRows, averageRows, countRows
+
             , At, at
             , Restriction, everything, asc, desc, (^>=), (^>), (^<=), (^<)
             , From(K,V), from, FromIndex(VI,VL), fromIndex, fromList
@@ -24,6 +32,7 @@ module Database.Daison
             , delete, delete_
             ) where
 
+import Prelude hiding (last)
 import Foreign
 import Foreign.C
 import Data.Data
@@ -31,7 +40,8 @@ import Data.IORef
 import Data.ByteString(ByteString,append,null,empty)
 import Data.ByteString.Unsafe(unsafeUseAsCStringLen,unsafePackCStringLen,unsafePackMallocCStringLen)
 import Data.Maybe(maybeToList, fromMaybe)
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.List as List
 import Control.Exception(Exception,throwIO,bracket,bracket_,onException)
 import Control.Applicative
@@ -417,113 +427,183 @@ withCascadeUpdate (Table tname indices fkeys) (index,f) = Table tname indices (c
 newtype Query a = Query {doQuery :: Ptr Btree -> Schema -> IO (QSeq a)}
 
 data QSeq a
-  = Output a (IO (QSeq a))
+  = Output a (IO (QSeq a)) (IO ())
   | Done
 
 nilQSeq = return Done
-
-appendQSeq map Done            rest' = rest'
-appendQSeq map (Output x rest) rest' = return (Output (map x) cont)
-  where
-    cont = do r <- rest
-              appendQSeq map r rest'
+done    = return ()
+close pCursor = sqlite3BtreeCloseCursor pCursor >> return ()
 
 instance Functor Query where
   fmap f q = Query (\pBtree schema -> fmap mapSeq (doQuery q pBtree schema))
-             where mapSeq (Output a m) = Output (f a) (fmap mapSeq m)
-                   mapSeq Done         = Done
+             where mapSeq (Output a m d) = Output (f a) (fmap mapSeq m) d
+                   mapSeq Done           = Done
 
 instance Applicative Query where
-  pure x  = Query (\pBtree schema -> pure (Output x nilQSeq))
+  pure x  = Query (\pBtree schema -> pure (Output x nilQSeq done))
   f <*> g = Query (\pBtree schema -> doQuery f pBtree schema  >>= loop pBtree schema )
     where
-      loop pBtree schema Done          = return Done
-      loop pBtree schema (Output x f') = do s <- doQuery g pBtree schema 
-                                            appendQSeq x s (f' >>= loop pBtree schema )
+      loop pBtree schema Done                = return Done
+      loop pBtree schema (Output f f' done0) = doQuery g pBtree schema  >>= append
+        where
+          append Done                 = f' >>= loop pBtree schema
+          append (Output x rest done) = return (Output (f x) (rest >>= append) (done0 >> done))
 
 instance Alternative Query where
-  empty   = Query (\pBtree schema -> return Done)
-  f <|> g = Query (\pBtree schema -> do r <- doQuery f pBtree schema
-                                        appendQSeq id r (doQuery g pBtree schema))
+  empty   = mzero
+  f <|> g = mplus f g
 
 instance Monad Query where
-  return x  = Query (\pBtree schema  -> return (Output x nilQSeq))
+  return x  = Query (\pBtree schema  -> return (Output x nilQSeq done))
   f >>= g   = Query (\pBtree schema  -> doQuery f pBtree schema  >>= loop pBtree schema)
     where
-      loop pBtree schema Done          = return Done
-      loop pBtree schema (Output x f') = do s <- doQuery (g x) pBtree schema
-                                            appendQSeq id s (f' >>= loop pBtree schema)
+      loop pBtree schema Done                = return Done
+      loop pBtree schema (Output x f' done0) = doQuery (g x) pBtree schema >>= append 
+        where
+          append Done                 = f' >>= loop pBtree schema
+          append (Output x rest done) = return (Output x (rest >>= append) (done0 >> done))
 
 instance MonadPlus Query where
   mzero     = Query (\pBtree schema -> return Done)
-  mplus f g = Query (\pBtree schema -> do r <- doQuery f pBtree schema
-                                          appendQSeq id r (doQuery g pBtree schema))
+  mplus f g = Query (\pBtree schema -> 
+    let append Done                 = doQuery g pBtree schema
+        append (Output x rest done) = return (Output x (rest >>= append) done)
+    in doQuery f pBtree schema >>= append)
 
-select :: Query a -> Daison [a]
-select q = Daison $ \(Database pBtree schemaRef) -> do
-  schema <- fetchSchema pBtree schemaRef
-  seq <- doQuery q pBtree schema
-  loop seq
-  where
-    loop Done         = return []
-    loop (Output x r) = do xs <- r >>= loop
-                           return (x:xs)
+select :: QueryMonad m => Query a -> m [a]
+select = query listRows
 
-listAll :: Query a -> Query [a]
-listAll q = Query $ \pBtree schema -> do
-  seq <- doQuery q pBtree schema
-  rs <- loop seq
-  return (Output rs nilQSeq)
-  where
-    loop Done         = return []
-    loop (Output x r) = do xs <- r >>= loop
-                           return (x:xs)
+class QueryMonad m where
+  query  :: Aggregator a b -> Query a -> m b
+
+instance QueryMonad Daison where
+  query aggr q = Daison $ \(Database pBtree schemaRef) -> do
+    schema <- fetchSchema pBtree schemaRef
+    runAggregator aggr (doQuery q pBtree schema)
+
+instance QueryMonad Query where
+  query aggr q = Query $ \pBtree schema -> do
+    rs <- runAggregator aggr (doQuery q pBtree schema)
+    return (Output rs nilQSeq done)
 
 anyOf :: [a] -> Query a
 anyOf xs = Query (\pBtree schema -> loop xs)
   where loop []     = return Done
-        loop (x:xs) = return (Output x (loop xs))
+        loop (x:xs) = return (Output x (loop xs) done)
 
-foldlQ :: (b -> a -> b) -> b -> Query a -> Query b
-foldlQ f x q = Query $ \pBtree schema -> do
-    seq <- doQuery q pBtree schema
-    x <- loop x seq
-    return (Output x nilQSeq)
-    where
-      loop x Done         = return x
-      loop x (Output y r) = r >>= loop (f x y)
+-----------------------------------------------------------------
+-- Aggregators
+-----------------------------------------------------------------
 
-foldl1Q :: (a -> a -> a) -> Query a -> Query a
-foldl1Q f q = Query $ \pBtree schema -> do
-    seq <- doQuery q pBtree schema
-    case seq of
-      Done       -> return Done
-      Output x r -> do x <- r >>= loop x
-                       return (Output x nilQSeq)
-    where
-      loop x Done         = return x
-      loop x (Output y r) = r >>= loop (f x y)
+newtype Aggregator a b = Aggregator {runAggregator :: IO (QSeq a) -> IO b}
 
-foldrQ :: (a -> b -> b) -> b -> Query a -> Query b
-foldrQ f x q = Query $ \pBtree schema -> do
-    seq <- doQuery q pBtree schema
-    x <- loop seq
-    return (Output x nilQSeq)
-    where
-      loop Done         = return x
-      loop (Output x r) = do y <- r >>= loop
-                             return (f x y)
+instance Functor (Aggregator a) where
+  fmap f a = Aggregator (\r -> fmap f (runAggregator a r))
 
-groupQ :: Ord b => (a -> b) -> Query a -> Query [a]
-groupQ f q = Query $ \pBtree schema -> do
-    seq <- doQuery q pBtree schema
-    loop Map.empty seq
-    where
-      loop m Done         = Map.foldr yield nilQSeq m
-      loop m (Output x r) = r >>= loop (add x m)
+listRows :: Aggregator a [a]
+listRows = Aggregator (\r -> r >>= loop)
+  where
+    loop Done           = return []
+    loop (Output x r _) = do xs <- r >>= loop
+                             return (x:xs)
 
-      add   x = Map.alter (Just . (x:) . fromMaybe []) (f x)
-      yield x = return . Output (reverse x)
+distinctRows :: Ord a => Aggregator a (Set.Set a)
+distinctRows = Aggregator (\r -> r >>= loop)
+  where
+    loop Done           = return Set.empty
+    loop (Output x r _) = do xs <- r >>= loop
+                             return $! (Set.insert x xs)
+
+firstRow :: Aggregator a a
+firstRow = Aggregator (\r -> r >>= loop)
+  where
+    loop Done           = fail "first: empty sequence"
+    loop (Output y r d) = d >> return y
+
+lastRow :: Aggregator a a
+lastRow = Aggregator (\r -> do mb_x <- r >>= loop
+                               case mb_x of
+                                 Nothing -> fail "last: empty sequence"
+                                 Just x  -> return x)
+  where
+    loop Done           = return Nothing
+    loop (Output y r d) = do mb_x <- r >>= loop
+                             case mb_x of
+                               Nothing -> return (Just y)
+                               Just x  -> return (Just x)
+
+topRows :: Int -> Aggregator a [a]
+topRows n = Aggregator (\r -> if n > 0
+                                then r >>= loop n
+                                else return [])
+  where
+    loop n Done           = return []
+    loop n (Output x r d)
+      | n == 1            = d >> return [x]
+      | otherwise         = do xs <- r >>= loop (n-1)
+                               return (x:xs)
+
+bottomRows :: Int -> Aggregator a [a]
+bottomRows n = Aggregator (\r -> if n > 0
+                                   then fmap snd (r >>= loop)
+                                   else return [])
+  where
+    loop Done           = return (0,[])
+    loop (Output x r d) = do
+      (m,xs) <- r >>= loop
+      if m == n
+        then return (m,    xs)
+        else return (m+1,x:xs)
+
+foldRows :: (b -> a -> b) -> b -> Aggregator a b
+foldRows f x = Aggregator (\r -> r >>= loop x)
+  where
+    loop !x Done           = return x
+    loop !x (Output y r d) = r >>= loop (f x y)
+
+foldRows1 :: (a -> a -> a) -> Aggregator a a
+foldRows1 f = Aggregator (\r -> r >>= first)
+  where
+    first Done           = fail "foldl1Q: empty sequence"
+    first (Output x r _) = r >>= loop x
+
+    loop !x Done           = return x
+    loop !x (Output y r _) = r >>= loop (f x y)
+
+sumRows :: Num a => Aggregator a a
+sumRows = foldRows (+) 0
+
+averageRows :: Fractional a => Aggregator a a
+averageRows = fmap (\(s,c) -> s/c)
+                   (foldRows (\(s,c) x -> (s+x,c+1)) (0,0))
+
+countRows :: Aggregator a Int
+countRows = foldRows (\c x -> c+1) 0
+
+groupRows :: Ord a => Aggregator (a,b) (Map.Map a [b])
+groupRows = groupRowsWith (:) []
+
+groupRowsWith :: Ord a => (b -> c -> c) -> c -> Aggregator (a,b) (Map.Map a c)
+groupRowsWith f z = Aggregator (\r -> r >>= loop Map.empty)
+  where
+    loop m Done           = return m
+    loop m (Output x r _) = r >>= (loop $! add x m)
+
+    add  x = Map.alter (Just . f (snd x) . fromMaybe z) (fst x)
+
+groupRowsBy :: Ord b => (a -> b) -> Aggregator a (Map.Map b [a])
+groupRowsBy f = Aggregator (\r -> r >>= loop Map.empty)
+  where
+    loop m Done           = return m
+    loop m (Output x r _) = r >>= (loop $! add x m)
+
+    add  x = Map.alter (Just . (x:) . fromMaybe []) (f x)
+
+sortRows :: Ord a => Aggregator a [a]
+sortRows     = fmap List.sort listRows
+
+sortRowsBy :: (a -> a -> Ordering) -> Aggregator a [a]
+sortRowsBy f = fmap (List.sortBy f) listRows
 
 -----------------------------------------------------------------
 -- Select
@@ -570,7 +650,6 @@ newtype At a = At a
 at = At
 
 
-
 class From s (r :: * -> *) where
   type K s
   type V s r
@@ -595,7 +674,7 @@ instance Data a => From (Table a) At where
                   ptr <- mallocBytes (fromIntegral size)
                   bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
                   checkSqlite3Error $ sqlite3BtreeData pCursor 0 size ptr
-                  return (Output (deserialize bs) nilQSeq)
+                  return (Output (deserialize bs) nilQSeq done)
 
 instance Data a => From (Table a) Restriction where
   type K (Table a)             = Key a
@@ -668,7 +747,7 @@ instance Data a => From (Table a) Restriction where
                    ptr  <- mallocBytes (fromIntegral size)
                    checkSqlite3Error $ sqlite3BtreeData pCursor 0 size ptr
                    bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral size)
-                   return (Output (key, deserialize bs) (step moveNext pCursor)))
+                   return (Output (key, deserialize bs) (step moveNext pCursor) (close pCursor)))
                `onException`
                (sqlite3BtreeCloseCursor pCursor)
 
@@ -682,7 +761,7 @@ instance Data b => From (Index a b) At where
       deserializeKeys bs =
         case deserializeKey bs of
           Nothing       -> return Done
-          Just (key,bs) -> return (Output key (deserializeKeys bs))
+          Just (key,bs) -> return (Output key (deserializeKeys bs) done)
 
 instance Data b => From (Index a b) Restriction where
   type K (Index a b)             = b
@@ -690,14 +769,14 @@ instance Data b => From (Index a b) Restriction where
 
   from idx x = Query (fromInterval' deserialize idx x)
     where
-      deserialize bs next =
+      deserialize bs next done =
         let (val,bs') = deserializeIndex bs
         in deserializeKeys val bs'
         where
           deserializeKeys val bs =
             case deserializeKey bs of
               Nothing       -> next
-              Just (key,bs) -> return (Output (val,key) (deserializeKeys val bs))
+              Just (key,bs) -> return (Output (val,key) (deserializeKeys val bs) done)
 
 class FromIndex (r :: * -> *) where
   type VI r a b
@@ -716,7 +795,7 @@ instance FromIndex At where
 
   fromList idx x = Query (fromAt' deserialize idx x)
     where
-      deserialize bs = return (Output (deserializeKeys bs) (return Done))
+      deserialize bs = return (Output (deserializeKeys bs) (return Done) done)
 
       deserializeKeys bs =
         case deserializeKey bs of
@@ -733,9 +812,9 @@ instance FromIndex Restriction where
 
   fromList idx x = Query (fromInterval' deserialize idx x)
     where
-      deserialize bs next = do
+      deserialize bs next done = do
         let (val,bs') = deserializeIndex bs
-        return (Output (val,deserializeKeys bs') next)
+        return (Output (val,deserializeKeys bs') next done)
         where
           deserializeKeys bs =
             case deserializeKey bs of
@@ -839,7 +918,7 @@ fromInterval' deserialize (Index tbl name fn) (Restriction s e order) = \pBtree 
                 bs <- unsafePackMallocCStringLen (castPtr ptr,fromIntegral payloadSize)
                 checkSqlite3Error $ sqlite3BtreeKey pCursor 0 (fromIntegral payloadSize) ptr
                 checkEnd e pCursor payloadSize ptr $ \pCursor -> do
-                  deserialize bs (step next pCursor))
+                  deserialize bs (step next pCursor) (close pCursor))
              `onException`
              (sqlite3BtreeCloseCursor pCursor)
 
@@ -864,11 +943,11 @@ insert tbl q = Daison $ \(Database pBtree schemaRef) -> do
     key' <- loop pBtree schema pCursor key seq
     return (key,key')
   where
-    loop pBtree schema pCursor key Done           = return key
-    loop pBtree schema pCursor key (Output val r) = do unsafeUseAsCStringLen (serialize val) $ \(ptr,size) -> do
-                                                         checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
-                                                       insertIndices pBtree schema tbl key val
-                                                       r >>= loop pBtree schema pCursor (key+1)
+    loop pBtree schema pCursor key Done             = return key
+    loop pBtree schema pCursor key (Output val r _) = do unsafeUseAsCStringLen (serialize val) $ \(ptr,size) -> do
+                                                           checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
+                                                         insertIndices pBtree schema tbl key val
+                                                         r >>= loop pBtree schema pCursor (key+1)
 
 insert_ :: Data a => Table a -> a -> Daison (Key a)
 insert_ tbl = store tbl Nothing
@@ -933,16 +1012,16 @@ update tbl q = Daison $ \(Database pBtree schemaRef) -> do
      seq <- doQuery q pBtree schema
      loop pBtree schema pCursor seq
   where
-    loop pBtree schema pCursor Done                 = return []
-    loop pBtree schema pCursor (Output p@(key,x) r) = do res <- alloca $ \pRes -> do
-                                                                  checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
-                                                                  peek pRes
-                                                         when (res == 0) (deleteIndices pBtree schema tbl key pCursor >> return ())
-                                                         unsafeUseAsCStringLen (serialize x) $ \(ptr,size) -> do
-                                                           checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
-                                                         insertIndices pBtree schema tbl key x
-                                                         ps <- r >>= loop pBtree schema pCursor
-                                                         return (p:ps)
+    loop pBtree schema pCursor Done                   = return []
+    loop pBtree schema pCursor (Output p@(key,x) r _) = do res <- alloca $ \pRes -> do
+                                                                    checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
+                                                                    peek pRes
+                                                           when (res == 0) (deleteIndices pBtree schema tbl key pCursor >> return ())
+                                                           unsafeUseAsCStringLen (serialize x) $ \(ptr,size) -> do
+                                                             checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
+                                                           insertIndices pBtree schema tbl key x
+                                                           ps <- r >>= loop pBtree schema pCursor
+                                                           return (p:ps)
 
 update_ :: Data a => Table a -> Query (Key a,a) -> Daison ()
 update_ tbl q = Daison $ \(Database pBtree schemaRef) -> do
@@ -951,15 +1030,15 @@ update_ tbl q = Daison $ \(Database pBtree schemaRef) -> do
      seq <- doQuery q pBtree schema
      loop pBtree schema pCursor seq
   where
-    loop pBtree schema pCursor Done               = return ()
-    loop pBtree schema pCursor (Output (key,x) r) = do res <- alloca $ \pRes -> do
-                                                                checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
-                                                                peek pRes
-                                                       when (res == 0) (deleteIndices pBtree schema tbl key pCursor >> return ())
-                                                       unsafeUseAsCStringLen (serialize x) $ \(ptr,size) -> do
-                                                         checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
-                                                       insertIndices pBtree schema tbl key x
-                                                       r >>= loop pBtree schema pCursor
+    loop pBtree schema pCursor Done                 = return ()
+    loop pBtree schema pCursor (Output (key,x) r _) = do res <- alloca $ \pRes -> do
+                                                                  checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
+                                                                  peek pRes
+                                                         when (res == 0) (deleteIndices pBtree schema tbl key pCursor >> return ())
+                                                         unsafeUseAsCStringLen (serialize x) $ \(ptr,size) -> do
+                                                           checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
+                                                         insertIndices pBtree schema tbl key x
+                                                         r >>= loop pBtree schema pCursor
 
 -----------------------------------------------------------------
 -- Delete
@@ -972,8 +1051,8 @@ delete tbl q = Daison $ \db@(Database pBtree schemaRef) -> do
     seq <- doQuery q pBtree schema
     loop pBtree schema pCursor seq
   where
-    loop pBtree schema pCursor Done           = return []
-    loop pBtree schema pCursor (Output key r) = do 
+    loop pBtree schema pCursor Done             = return []
+    loop pBtree schema pCursor (Output key r _) = do 
       res <- alloca $ \pRes -> do
                checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
                peek pRes
@@ -992,8 +1071,8 @@ delete_ tbl q = Daison $ \(Database pBtree schemaRef) -> do
      seq <- doQuery q pBtree schema
      loop pBtree schema pCursor seq
   where
-    loop pBtree schema pCursor Done           = return ()
-    loop pBtree schema pCursor (Output key r) = do 
+    loop pBtree schema pCursor Done             = return ()
+    loop pBtree schema pCursor (Output key r _) = do 
       res <- alloca $ \pRes -> do
                checkSqlite3Error $ sqlite3BtreeMoveTo pCursor nullPtr key 0 pRes
                peek pRes
