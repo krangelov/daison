@@ -25,7 +25,8 @@ module Database.Daison
             , listRows, distinctRows
             , firstRow, lastRow, topRows, bottomRows
             , foldRows, foldRows1
-            , groupRows, groupRowsWith, groupRowsBy
+            , groupRows, groupRowsWith, groupRowsBy, groupRowsByWith
+            , having
             , sortRows,  sortRowsBy
             , sumRows, averageRows, countRows
 
@@ -645,6 +646,17 @@ groupRowsBy f = Aggregator (\r -> r >>= loop Map.empty)
     loop m (Output x r _) = r >>= (loop $! add x m)
 
     add  x = Map.alter (Just . (x:) . fromMaybe []) (f x)
+
+groupRowsByWith :: Ord b => (a -> b) -> (a -> c -> c) -> c -> Aggregator a (Map.Map b c)
+groupRowsByWith f g z = Aggregator (\r -> r >>= loop Map.empty)
+  where
+    loop m Done           = return m
+    loop m (Output x r _) = r >>= (loop $! add x m)
+
+    add  x = Map.alter (Just . g x . fromMaybe z) (f x)
+
+having :: Functor m => m (Map.Map a b) -> (b -> Bool) -> m (Map.Map a b)
+having f p = fmap (Map.filter p) f
 
 sortRows :: Ord a => Aggregator a [a]
 sortRows     = fmap List.sort listRows
