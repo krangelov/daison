@@ -18,7 +18,7 @@ module Database.Daison
             , dropDataSet, tryDropDataSet
             , insertData, deleteData
 
-            , Query
+            , Query, QueryMonad
             , select, query, anyOf
 
             , Aggregator
