@@ -135,25 +135,25 @@ This function takes a database and an access mode and performs an operation in t
 
 ## Access the Data
 
-# Insert
+### Insert
 
 TODO...
 
-# Select
+### Select
 
 ```haskell
 select :: Query a -> Daison [a]
 ```
 TODO...
 
-# Update
+### Update
 
 TODO...
 
-# Store
+### Store
 
 TODO...
 
-# Delete
+### Delete
 
 TODO...
