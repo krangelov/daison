@@ -405,7 +405,7 @@ withCascadeDelete (Table tname indices fkeys) index = Table tname indices (casca
                                   checkSqlite3Error $ sqlite3BtreeDelete pCursor 0
                                 deleteForeign pCursor bs
 
-withCascadeUpdate :: Data b => Table a -> (Index b (Key a), b -> b) -> Table a
+withCascadeUpdate :: Data b => Table a -> (Index b (Key a), Key a -> b -> b) -> Table a
 withCascadeUpdate (Table tname indices fkeys) (index,f) = Table tname indices (cascade:fkeys)
   where
     cascade pBtree schema key =
@@ -422,7 +422,7 @@ withCascadeUpdate (Table tname indices fkeys) (index,f) = Table tname indices (c
                                          peek pRes
                                 when (res == 0) $ do
                                   val <- deleteIndices pBtree schema tbl key pCursor
-                                  let val' = f val
+                                  let val' = f key val
                                   unsafeUseAsCStringLen (serialize val') $ \(ptr,size) ->
                                     checkSqlite3Error $ sqlite3BtreeInsert pCursor nullPtr key (castPtr ptr) (fromIntegral size) 0 0 0
                                   insertIndices pBtree schema tbl key val'
