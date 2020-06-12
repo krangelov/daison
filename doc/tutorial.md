@@ -210,8 +210,8 @@ runDaison db ReadMode $ do
 ```
 where just like `from`, `fromIndex` is overloaded:
 ```haskell
-fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> At b -> Query (Key a, a)
-fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> Restriction b -> Query (Key a, a, b)
+fromIndex :: (Data a, Data b) => Index a b -> At b -> Query (Key a, a)
+fromIndex :: (Data a, Data b) => Index a b -> Restriction b -> Query (Key a, a, b)
 ```
 
 #### Aggregation
