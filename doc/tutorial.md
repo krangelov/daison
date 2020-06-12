@@ -138,7 +138,7 @@ A more advanced way is to use the equivalent for `INSERT-SELECT` in SQL:
 ```haskell
 insert :: Data a => Table a -> Query a -> Daison (Key a, Key a)
 ```
-Instead of a single value, this primitive takes a query which can extract data from other tables in order to prepare the values to be inserted in the target table. The query itself is a monadic function which is often conveniently expressed as a list comprehension. The result from `insert` is a pair of the initial and final primary keys, for the newly inserted rows. Here is an example:
+Instead of a single value, this primitive takes a query which can extract data from other tables in order to prepare the values to be inserted in the target table. The query itself is a monadic function which is often conveniently expressed as a monad comprehension. The result from `insert` is a pair of the initial and final primary keys, for the newly inserted rows. Here is an example:
 ```haskell
 runDaison db ReadWriteMode $ do
   (start,end) <- insert foo [f x | x <- from bar]
@@ -150,10 +150,40 @@ More details about queries follow.
 
 ### Select
 
+The main primitive for extracting data from the database is:
 ```haskell
-select :: Query a -> Daison [a]
+select :: QueryMonad m => Query a -> m [a]
 ```
-TODO...
+Its only argument is a query which often is written as a monad comprehension. Note that the functon is overloaded over the return monad which allows us to use `select` either on the top-level within a transaction or nested inside another query.
+
+#### Queries
+
+Now we should go deeper into how queries are built. The main querying primitive is:
+```haskell
+from :: From s r => s -> r (K s) -> Query (V s r)
+```
+which has a complicated type but the only purpose of that type is to overload the function over four possible types:
+```haskell
+from :: Data a => Table a -> At (Key a) -> Query a
+from :: Data a => Table a -> Restriction (Key a) -> Query (Key a, a)
+from :: Data b => Index a b -> At b -> Query (Key a)
+from :: Data b => Index a b -> Restriction b -> Query (b, Key a)
+```
+
+```haskell
+fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> r b -> Query (VI r a b)
+```
+
+```haskell
+fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> At b -> Query (Key a, a)
+fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> Restriction b -> Query (Key a, a, b)
+```
+
+#### Aggregation
+
+#### Nested queries
+
+
 
 ### Update
 
