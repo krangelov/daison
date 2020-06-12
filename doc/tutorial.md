@@ -1,14 +1,14 @@
 # The Daison Tutorial
 
-Daison (DAta lISt comprehensiON) is a database where the data management language is Haskell instead of SQL. The main idea is that instead of SELECT statements, you use Haskell's List Comprehensions as generalized to monads by using the Monad Comprehension extension. The other benefit is that the database can store any serializable data type defined Haskell, this avoids the need to convert between Haskell types and SQL types for every query. An added benefit is that Daison naturally supports algebraic data types which is problematic in relational databases.
+Daison (DAta lISt comprehensiON) is a database where the data management language is Haskell instead of SQL. The main idea is that instead of SELECT statements, you use Haskell's List Comprehensions generalized to monads by using the Monad Comprehension extension. The other benefit is that the database can store any serializable data type defined in Haskell. This avoids the need to convert between Haskell types and SQL types for every query. An added benefit is that Daison naturally supports algebraic data types which is problematic in relational databases.
 
 The backend storage is SQLite from which I have stripped all SQL related features. The result is a simple key-value storage,  on top of which there is a Haskell API which replaces the SQL language. This gives us the efficiency and the reliability of an established database, but without the intermediatry of the SQL interpreter.
 
-The following tutorial will introduce how to perform different operations in Daison, sometimes with comparison with SQL.
+The following tutorial will introduce how to perform different operations in Daison, sometimes in comparison with SQL.
 
 ## Opening and closing a database
 
-Open and closing a database is simply:
+Opening and closing a database is simply:
 ```haskell
 main = do db <- openDB "student_database.db"
           closeDB db
@@ -17,7 +17,7 @@ If a file with that name does not exist then a new database with that name will 
 
 ## Transactions
 
-In order to do anything with a Daison database, you first need to start a transaction. This applies both to read-only as well as read-write operations. The backend allows multiple reader - single writer access. This means that even if you only read from the database, the engine must know when you are done in order to allow changes. What kind of access you need is described with `AccessMode` data type:
+In order to do anything with a Daison database, you first need to start a transaction. This applies both to read-only as well as read-write operations. The backend allows multiple reader - single writer access. This means that even if you only read from the database, the engine must know when you are done in order to allow changes. What kind of access you need is described with the `AccessMode` data type:
 ```haskell
 data AccessMode = ReadWriteMode | ReadOnlyMode
 ```
@@ -30,7 +30,7 @@ This function takes a database and an access mode and performs an operation in t
 
 ## Defining and creating tables
 
-Although this is a NoSQL database it is still based on the concept of tables. A table however doesn't have any columns, it is just a list rows, where each row stores one Haskell value. The value, of course, could be of record type, so in that sense the Daison tables could have columns as well.
+Although this is a NoSQL database it is still based on the concept of tables. A table however doesn't have any columns, it is just a sequence of rows, where each row stores one Haskell value. The value, of course, could be of record type, so in that sense Daison tables could still have columns.
 
 Before we create a table, we need to define the data type for the rows:
 ```haskell
@@ -64,7 +64,7 @@ students_avg_grade = index students "avg_grade" avg_grade
 avg_grade :: Student -> Double
 avg_grade s = fromIntegral (sum (grades s)) / fromIntegral (length (grades s))
 ```
-As you can see the tables/indices are just Haskell functions defined by using primitives from the Daison DSL. Here `table`:
+As you can see the tables/indices are just Haskell functions defined by using primitives from the Daison DSL. Here:
 ```haskell
 table :: String -> Table a
 ```
@@ -75,29 +75,29 @@ withIndex :: Data b => Table a -> Index a b -> Table a
 The index itself is defined in one of three possible ways:
 
 - The simplest way is by using the `index` primitive:
-```haskell
-index :: Table a -> String -> (a -> b) -> Index a b
-```
-It takes a table, an index name and an arbitrary function which from a row value computes the value by which the row must be indexed. In the example above there two indexes of this kind - `students_name` and `students_avg_grade`. When the row value is of record type, it is natural that some of the indices will be over a particular field. This is the case with `students_name` but it does not have to be the case. Any function will work just as well. For example `students_avg_grade` indexes over the average grade which is not stored but is computed every time when a row is inserted or updated. In the SQL terminology this is called "computed index", which is supported by some databases but not all. In that case you need to define an appropriate function:
+  ```haskell
+  index :: Table a -> String -> (a -> b) -> Index a b
+  ```
+  It takes a table, an index name and an arbitrary function which from a row value computes the value by which the row must be indexed. In the example above there two indexes of this kind - `students_name` and `students_avg_grade`. When the row value is of record type, it is natural that some of the indices will be over a particular field. This is the case with `students_name`, but it does not have to be the case. For example `students_avg_grade` indexes over the average grade which is not stored, but is computed every time when a row is inserted or updated. In the SQL terminology this is called "computed index" and is supported by some SQL databases but not all.
 
 - You can also index a row by more than one value by using the primitive:
-```haskell
-listIndex :: Table a -> String -> (a -> [b]) -> Index a b
-```
-In the above example we have the index `students_grade` which lets you to search for students who got a particular grade. This kind of indices does not have correspondence in SQL since in (most) relational databases you cannot store lists.
+  ```haskell
+  listIndex :: Table a -> String -> (a -> [b]) -> Index a b
+  ```
+  In the above example we have the index `students_grade` which lets you to search for students who got a particular grade. This kind of indices does not have correspondence in SQL since in (most) relational databases you cannot store lists.
 
 - A special case is when you want to index some rows but not all. This is possible with the primitive:
-```haskell
-maybeIndex :: Table a -> String -> (a -> Maybe b) -> Index a b
-```
-when the indexing function returns `Nothing` then the current row will be skipped from the index. This is equivalent to an index over a nullable column in SQL.
+  ```haskell
+  maybeIndex :: Table a -> String -> (a -> Maybe b) -> Index a b
+  ```
+  when the indexing function returns `Nothing` then the current row will be skipped from the index. This is equivalent to an index over a nullable column in SQL.
 
-Finally, when a tables is defined, you must also create it. The definitions above are just Haskell functions and they do not do anything with the database. You should call `createTable` explicitly:
+Finally, when a table is defined, you must also create it. The definitions above are just Haskell functions and they do not do anything with the database. You should call `createTable` explicitly:
 ```haskell
 runDaison db ReadWriteMode $ do
   createTable students
 ```
-This creates both the table and the indices which are associated with that table. Note that since this operation changes the database, it must be executed within a read-write transaction.
+This creates both the table and the indices which are associated with it. Note that since this operation changes the database, it must be executed within a read-write transaction.
 
 If a table with that name already exists, `createTable` will fail. If you want to create a table only if it is not created yet then use `tryCreateTable` instead.
 
@@ -129,16 +129,16 @@ The simplest way to insert data in a table is the primitive:
 ```haskell
 insert_ :: Data a => Table a -> a -> Daison (Key a)
 ```
-It just takes a table and a value and inserts the new value in the table. The results is the value of the primary key. Here the type `Key a` is just a type synonym for a 64-bit integer:
+It just takes a table and a value and inserts the new value in the table. The results is the primary key number. The type `Key a` is just a synonym for a 64-bit integer:
 ```haskell
 type Key a = Int64
 ```
 
-A more advanced way is to use the equivalent for `INSERT-SELECT` in SQL:
+A more advanced way is to use the equivalent of `INSERT-SELECT` in SQL:
 ```haskell
 insert :: Data a => Table a -> Query a -> Daison (Key a, Key a)
 ```
-Instead of a single value, this primitive takes a query which can extract data from other tables in order to prepare the values to be inserted in the target table. The query itself is a monadic function which is often conveniently expressed as a monad comprehension. The result from `insert` is a pair of the initial and final primary keys, for the newly inserted rows. Here is an example:
+Instead of a single value, this primitive takes a query which can extract data from other tables in order to prepare the values to be inserted in the target table. The query itself is a monadic function which is often conveniently expressed as a monad comprehension. The result from `insert` is a pair of the initial and final primary keys of the newly inserted rows. Here is an example:
 ```haskell
 runDaison db ReadWriteMode $ do
   (start,end) <- insert foo [f x | x <- from bar]
@@ -154,7 +154,7 @@ The main primitive for extracting data from the database is:
 ```haskell
 select :: QueryMonad m => Query a -> m [a]
 ```
-Its only argument is a query which often is written as a monad comprehension. Note that the functon is overloaded over the return monad which allows us to use `select` either on the top-level within a transaction or nested inside another query.
+Its only argument is a query which often is written as a monad comprehension. Note that the functon is overloaded over the return monad which allows us to use `select` both on the top-level within a transaction as well as nested inside another query.
 
 #### Queries
 
@@ -169,14 +169,14 @@ from :: Data a => Table a -> Restriction (Key a) -> Query (Key a, a)
 from :: Data b => Index a b -> At b -> Query (Key a)
 from :: Data b => Index a b -> Restriction b -> Query (b, Key a)
 ```
-Obviously the first argument to `from` an be either a table or an index. The second argument can be of type `At`, if you search for a particular value. For example if you want to get the name of the student with primary key `1` then you should do:
+Obviously the first argument of `from` can be either a table or an index. The second argument must be of type `At`, if you search for a particular value. For example if you want to get the name of the student with primary key `1` then you should do:
 ```haskell
 runDaison db ReadMode $ do
   select [name s | s <- from students (at 1)]
 ```
 the corresponding SQL query would be:
 ```SQL
-SELECT * FROM students WHERE id=1
+SELECT name FROM students WHERE id=1
 ```
 
 If you don't know the particular value but you want to search in given range then instead you have:
@@ -188,13 +188,13 @@ which in SQL is:
 ```SQL
 SELECT id,avg_grade FROM students WHERE avg_grade > 4 AND avg_grade < 5
 ```
-In this example we used an index instead of a table. The `from` function works just as well but now it returns not the table row, but only the primary key. As in the relational databases, the tables contain the data, while the indices contain a mapping from a value to a list of primary keys whose rows are indexed under that value. This is reflected accordingly in the type signatures for `from`.
+In this example we used an index instead of a table. The `from` function works just as well but now it returns not the table row, but only the primary key. As in the relational databases, the tables contain the data, while the indices contain a mapping from a value to the list of primary keys whose rows are indexed under that value. This is reflected accordingly in the type signatures for `from`.
 
-Another thing to note is that when `from` is used with a restriction then it also returns the actual matching key when it si used with a table, or the matching value when it is used with an index. This makes sense. When you use the `at` primitive then you already know the right key/value, but when you restriction then you only specify a filter, and then it is useful to get the actual key or value.
+Another thing to note is that when `from` is used with a restriction then it also returns the actual matching key when it is used with a table, or the matching value when it is used with an index. This makes sense. When you use the primitive  `at` then you already know the right key/value, but when you use restriction then it only acts as a filter, and therefor it is useful to get the actual key or value.
 
 A bit more about the `Restriction` type. A restriction can be either `everything`, `asc` or `desc`. All the three doesn't put any constraint on the selection. They basically say give me all rows. In addition `asc`/`desc` says that the result must be sorted in asceding/descending order. Note that ordering is done by a generic ordering function which is based on the `Data` instance. Even if you define a custom `Ord` instance this would not affect the ordering in Daison. The generic ordering follows the strategy used for the automatic derivation of `Ord`, so if you use `deriving Ord` you will get consistent results. The reason for that choice is that it lets us to avoid deserializing all key values when we do search in an index.
 
-A restriction can be modified with zero or more of the (^<), (^<=), (^>) or (^>=) operators. This lets so you to specify an open or closed interval of allowed values. Any other constraint should be placed as an ordinary guard, for example:
+Lastly, a restriction can be modified with zero or more of the (^<), (^<=), (^>) or (^>=) operators. This lets so you to specify an open or closed interval of allowed values. Any other constraint should be placed as an ordinary guard, for example:
 ```haskell
 runDaison db ReadMode $ do
   select [n | n <- from numbers everything ^> 1, isPrimeNumber n]
@@ -226,7 +226,7 @@ Here you can think of the `Aggregator` as a function which transforms a sequence
 - ```haskell
   listRows :: Aggregator a [a]
   ```
-  just collects the rows into a list. In fact select is defined as 
+  just collects the rows into a list. In fact `select` is defined as:
   ```haskell
   select = quert listRows
   ```
@@ -269,7 +269,7 @@ Here you can think of the `Aggregator` as a function which transforms a sequence
 - ```haskell
   countRows :: Fractional a => Aggregator a a
   ```
-  counts the average of the selected rows
+  counts the selected rows
 
 - ```haskell
   foldRows :: (b -> a -> b) -> b -> Aggregator a b
@@ -321,7 +321,7 @@ query  :: QueryMonad m => Aggregator a b -> Query a -> m b
 ```
 This allows us to to execute queries both on the top-level as well as nested in another query.
 
-Let suppose that we also have a table for courses: 
+Let's suppose that we also have a table for courses: 
 ```haskell
 data Course
   = Course
@@ -345,7 +345,7 @@ runDaison db ReadMode $ do
               , (course_id, course ) <- fromIndex course_student (at student_id)]
 ```
 
-The problem with this query is that if a student is enrolled in several courses its data will be returned several times. The way to avoid this in SQL is to split the query in two queries where the second query will be executed for each row in the first one. Since Daison supports arbitrary algebraic data types, this can be done in a better way with nested queries:
+The problem with this query is that if a student is enrolled in several courses then its data will be returned several times. The way to avoid this in SQL is to split the query in two queries where the second query will be executed for each row in the first one. Since Daison supports arbitrary algebraic data types, this can be done in a better way with nested queries:
 ```haskell
 runDaison db ReadMode $ do
   select [(student_id,student,courses)
@@ -385,7 +385,7 @@ The primitive `store` is a combination of `insert` and `update`. Imagine that yo
 ```haskell
 store :: Data a => Table a -> Maybe (Key a) -> a -> Daison (Key a)
 ```
-If it is called with `Nothing` then the value is inserted and the new primary key is inserted. Otherwise, when it is called with `Just key` then update happens and the same key is also returned as a result.
+If it is called with `Nothing` then the value is inserted and the new primary key is returned. Otherwise, when it is called with `Just key` then update happens and the same key is again returned as a result.
 
 ### Delete
 
@@ -438,19 +438,19 @@ courses :: Table Course
 courses = table "courses"
           `withForeignKey` students_course
 ```
-In this version, for each student we store not just a list of grades but also the ids of the corresponding courses. This means that by loading the data for a student, we immediately see in which courses he/she is involved. There is still an index `students_course` which lets us to quickly do the opposite, i.e. find which students are involve in a given course.
+In this version, for each student we store not just a list of grades but also the ids of the corresponding courses. This means that by loading the data for a student, we immediately see in which courses he/she is involved. There is still an index `students_course` which lets us to quickly do the opposite, i.e. find which students are involved in a given course.
 
-The problem is that if someone deletes a course the data for all involved students will hold a dangling key to a non existent course. This is solved by using the primitive:
+The problem is that if someone deletes a course, the data for all involved students will hold a dangling key to a non existent course. This is solved by using the primitive:
 ```haskell
 withForeignKey :: Table a -> Index b (Key a) -> Table a
 ```
-on the `courses` table. This tells Daison that whenever someone deletes a course it must check in the given index whether there is a student refering to that course. If there are reference, an exception will be thrown which will also roll back the transaction.
+on the `courses` table. This tells Daison that whenever someone deletes a course it must check in the given index whether there is a student refering to that course. If there are reference, an exception will be thrown which will also rolls back the transaction.
 
-Sometimes we don't want to disable the deletion, since another way to keep the consistancy is to change the refences. For that purpose there are two more primitives:
+Sometimes we don't want to disable the deletion and another way to keep the consistancy is to change the references. For that purpose there are two more primitives:
 ```haskell
 withCascadeDelete :: Data b => Table a -> Index b (Key a) -> Table a
 withCascadeUpdate :: Data b => Table a -> (Index b (Key a), Key a -> b -> b) -> Table a
 ```
-If we had used cascade deletion, then together with the deleted course Daison will also automatically delete all students who are enrolled in the course. Cascade update on the other hand will update the rows for all enrolled students with the provided function. For instance the function can remove the reference to that course together with the grade.
+If we had used cascade deletion, then, together with the deleted course, Daison will also automatically delete all students who are enrolled in the course. Cascade update on the other hand will update the rows for all enrolled students with the provided function. For instance the function can remove the reference to that course together with the grade.
 
 Neither the cascade delete nor the cascade update scenario are good designs for the students example, but they are useful in other cases. Consider for instance that we store books and chapter titles. Each chapter belongs to a given book, so if we delete a book then it makes sense to delete the associated chapters as well.
