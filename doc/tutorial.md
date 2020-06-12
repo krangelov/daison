@@ -169,11 +169,46 @@ from :: Data a => Table a -> Restriction (Key a) -> Query (Key a, a)
 from :: Data b => Index a b -> At b -> Query (Key a)
 from :: Data b => Index a b -> Restriction b -> Query (b, Key a)
 ```
-
+Obviously the first argument to `from` an be either a table or an index. The second argument can be of type `At`, if you search for a particular value. For example if you want to get the name of the student with primary key `1` then you should do:
 ```haskell
-fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> r b -> Query (VI r a b)
+runDaison db ReadMode $ do
+  select [name s | s <- from students (at 1)]
+```
+the corresponding SQL query would be:
+```SQL
+SELECT * FROM students WHERE id=1
 ```
 
+If you don't know the particular value but you want to search in given range then instead you have:
+```haskell
+runDaison db ReadMode $ do
+  select [(id,avg_grade) | (avg_grade,id) <- from students_avg_grade (everything ^> 4 ^< 5)]
+```
+which in SQL is:
+```SQL
+SELECT id,avg_grade FROM students WHERE avg_grade > 4 AND avg_grade < 5
+```
+In this example we used an index instead of a table. The `from` function works just as well but now it returns not the table row, but only the primary key. As in the relational databases, the tables contain the data, while the indices contain a mapping from a value to a list of primary keys whose rows are indexed under that value. This is reflected accordingly in the type signatures for `from`.
+
+Another thing to note is that when `from` is used with a restriction then it also returns the actual matching key when it si used with a table, or the matching value when it is used with an index. This makes sense. When you use the `at` primitive then you already know the right key/value, but when you restriction then you only specify a filter, and then it is useful to get the actual key or value.
+
+A bit more about the `Restriction` type. A restriction can be either `everything`, `asc` or `desc`. All the three doesn't put any constraint on the selection. They basically say give me all rows. In addition `asc`/`desc` says that the result must be sorted in asceding/descending order. A restriction can be modified with zero or more of the (^<), (^<=), (^>) or (^>=) operators. Any other constraint should be placed as an ordinary guard, for example:
+```haskell
+runDaison db ReadMode $ do
+  select [n | n <- from numbers everything, isPrimeNumber n]
+```
+
+Finally, as we said using `from` with an index only gives you the primary key. It is quite frequent, however, that you also want the full table row. You can do it as follows:
+```haskell
+runDaison db ReadMode $ do
+  select [(id,row,v) | (v,id) <- from foo_index everything, row <- from foo (at id)]
+```
+but you can also use the shorthand:
+```haskell
+runDaison db ReadMode $ do
+  select [(id,row,v) | (id,row,v) <- fromIndex foo_index everything]
+```
+where just like `from`, `fromIndex` is overloaded:
 ```haskell
 fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> At b -> Query (Key a, a)
 fromIndex :: (Data a, Data b, FromIndex r) => Index a b -> Restriction b -> Query (Key a, a, b)
