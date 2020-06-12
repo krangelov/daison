@@ -216,6 +216,100 @@ fromIndex :: (Data a, Data b) => Index a b -> Restriction b -> Query (Key a, a, 
 
 #### Aggregation
 
+The result from `select` is always the list of selected rows. In SQL on the other hand, the rows can be aggregated by using aggregate functions like `SUM` and `AVERAGE`. You can of course select all relevant rows in a list and then post-process them in Haskell, but this might mean that you have to collect a lot of data, just in order to transform it after that. A better alternative is to use the primitive `query`  instead of `select`:
+```haskell
+query :: QueryMonad m => Aggregator a b -> Query a -> m b
+```
+Here you can think of the `Aggregator` as a function which transforms a sequence of rows of type `a` (the query) into a result of type `b` but in incremental fashion. There are several built-in aggregators:
+- ```haskell
+  listRows :: Aggregator a [a]
+  ```
+  just collects the rows into a list. In fact select is defined as 
+  ```haskell
+  select = quert listRows
+  ```
+  
+- ```haskell
+  distinctRows :: Ord a => Aggregator a (Set a)
+  ```
+  retains only the unique rows and returns a `Set` instead of list.
+
+- ```haskell
+  firstRow :: Aggregator a a
+  ```
+  returns the first row and ignores the rest.
+
+- ```haskell
+  lastRow :: Aggregator a a
+  ```
+  skips all initial rows and returns the last one.
+
+- ```haskell
+  topRows :: Int -> Aggregator a [a]
+  ```
+  returns the first few rows.
+
+- ```haskell
+  bottomRows :: Int -> Aggregator a [a]
+  ```
+  returns the last few rows.
+
+- ```haskell
+  sumRows :: Num a => Aggregator a a
+  ```
+  sums all the rows and returns the result.
+
+- ```haskell
+  averageRows :: Fractional a => Aggregator a a
+  ```
+  computes the average of the selected numbers
+
+- ```haskell
+  countRows :: Fractional a => Aggregator a a
+  ```
+  counts the average of the selected rows
+
+- ```haskell
+  foldRows :: (b -> a -> b) -> b -> Aggregator a b
+  ```
+  does a top-to-bottom fold of the rows.
+
+- ```haskell
+  foldRows1 :: (b -> a -> b) -> Aggregator a b
+  ```
+  does the same as `foldRows` but uses the first row as the initial value.
+
+- ```haskell
+  groupRows :: Ord a => Aggregator (a,b) (Map.Map a [b])
+  ```
+  groups rows of pairs by the first element in the pair.
+
+- ```haskell
+  groupRowsWith :: Ord a => (b -> c -> c) -> c -> Aggregator (a,b) (Map.Map a c)
+  ```
+  the same as `groupRows` but also uses a function to combine the grouped values.
+
+- ```haskell
+  groupRowsBy :: Ord b => (a -> b) -> Aggregator a (Map.Map b [a])
+  ```
+  the same as `groupRows` but the rows can be of arbitrary type. A function is used
+  to compute the value by which the grouping is done.
+
+- ```haskell
+  groupRowsByWith :: Ord b => (a -> b) -> (a -> c -> c) -> c -> Aggregator a (Map.Map b c)
+  ```
+  a combination of `groupRowsBy` and `groupRowsWith`.
+
+- ```haskell
+   sortRows :: Ord a => Aggregator a [a]
+  ```
+  the same as `listRows` but also sorts the values
+
+- ```haskell
+  sortRowsBy :: (a -> a -> Ordering) -> Aggregator a [a]
+  ```
+  the same as `sortRows` but uses an ordering function.
+
 #### Nested queries
 
 
