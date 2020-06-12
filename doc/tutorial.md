@@ -192,10 +192,12 @@ In this example we used an index instead of a table. The `from` function works j
 
 Another thing to note is that when `from` is used with a restriction then it also returns the actual matching key when it si used with a table, or the matching value when it is used with an index. This makes sense. When you use the `at` primitive then you already know the right key/value, but when you restriction then you only specify a filter, and then it is useful to get the actual key or value.
 
-A bit more about the `Restriction` type. A restriction can be either `everything`, `asc` or `desc`. All the three doesn't put any constraint on the selection. They basically say give me all rows. In addition `asc`/`desc` says that the result must be sorted in asceding/descending order. A restriction can be modified with zero or more of the (^<), (^<=), (^>) or (^>=) operators. Any other constraint should be placed as an ordinary guard, for example:
+A bit more about the `Restriction` type. A restriction can be either `everything`, `asc` or `desc`. All the three doesn't put any constraint on the selection. They basically say give me all rows. In addition `asc`/`desc` says that the result must be sorted in asceding/descending order. Note that ordering is done by a generic ordering function which is based on the `Data` instance. Even if you define a custom `Ord` instance this would not affect the ordering in Daison. The generic ordering follows the strategy used for the automatic derivation of `Ord`, so if you use `deriving Ord` you will get consistent results. The reason for that choice is that it lets us to avoid deserializing all key values when we do search in an index.
+
+A restriction can be modified with zero or more of the (^<), (^<=), (^>) or (^>=) operators. This lets so you to specify an open or closed interval of allowed values. Any other constraint should be placed as an ordinary guard, for example:
 ```haskell
 runDaison db ReadMode $ do
-  select [n | n <- from numbers everything, isPrimeNumber n]
+  select [n | n <- from numbers everything ^> 1, isPrimeNumber n]
 ```
 
 Finally, as we said using `from` with an index only gives you the primary key. It is quite frequent, however, that you also want the full table row. You can do it as follows:
