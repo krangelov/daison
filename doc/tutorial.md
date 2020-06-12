@@ -353,15 +353,48 @@ The result from this query will be a sequence of rows where each row will be abo
 
 ### Update
 
-TODO...
+Updates can be made with the `update` primitive:
+```haskell
+update :: Data a => Table a -> Query (Key a, a) -> Daison [(Key a, a)]
+```
+It takes a query which returns pairs of key and value and then updates the corresponding rows in a table with those new values. For example:
+```haskell
+runDaison db ReadWriteMode $ do
+  update student
+         [(student_id,student{code=2})
+              | (student_id,student,_) <- fromIndex students_avg_grade (everything ^>= 4.5)]
+```
+will change the codes for all students whose average grade is more than or equal to 4.5.
+
+The result from `update` is the list of key/value pairs that were updated. If you don't need that result then you can also use:
+```haskell
+update_ :: Data a => Table a -> Query (Key a, a) -> Daison ()
+```
+
+The update primitives always assume that several rows are changed based on the result from a query. If you only want to change one row then you simply use `return`:
+```haskell
+update_ students (return (1,Student {name="Nils Holgersson", code=1, grades=[5]}))
+```
 
 ### Store
 
-TODO...
+The primitive `store` is a combination of `insert` and `update`. Imagine that you edit a document which has to be stored in a database. In SQL, if the document is new then it must be added with `INSERT`, otherwise the old document must be updated with `UPDATE` statement. For that scenario Daison provides the combined primitive:
+```haskell
+store :: Data a => Table a -> Maybe (Key a) -> a -> Daison (Key a)
+```
+If it is called with `Nothing` then the value is inserted and the new primary key is inserted. Otherwise, when it is called with `Just key` then update happens and the same key is also returned as a result.
 
 ### Delete
 
-TODO...
+Deletion is possible with the primitives:
+```haskell
+delete  :: Data a => Table a -> Query (Key a) -> Daison [Key a]
+delete_ :: Data a => Table a -> Query (Key a) -> Daison ()
+```
+Like with `update` the deletion is based on a query which returns the keys to be deleted. The primitive `delete` also returns the list of deleted keys. If you want to delete only one row, use `return`:
+```haskell
+delete_ students (return 1)
+```
 
 ## Foreign Keys
 
