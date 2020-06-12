@@ -312,7 +312,44 @@ Here you can think of the `Aggregator` as a function which transforms a sequence
 
 #### Nested queries
 
+Both `select` and `query` are parametrized by the result monad:
+```haskell
+select :: QueryMonad m => Query a -> m [a]
+query  :: QueryMonad m => Aggregator a b -> Query a -> m b
+```
+This allows us to to execute queries both on the top-level as well as nested in another query.
 
+Let suppose that we also have a table for courses: 
+```haskell
+data Course
+  = Course
+      { title       :: String
+      , student_ids :: [Key Student]
+      }
+      
+courses :: Table Course
+courses = table "courses"
+          `withIndex` course_student
+          
+course_student :: Index Course (Key Student)
+course_student = listIndex courses "student" student_ids
+```
+then we can join it with the students table:
+```haskell
+runDaison db ReadMode $ do
+  select [(student_id,student,course_id,course)
+              | (student_id,student) <- from students everything
+              , (course_id, course ) <- fromIndex course_student (at student_id)]
+```
+
+The problem with this query is that if a student is enrolled in several courses its data will be returned several times. The way to avoid this in SQL is to split the query in two queries where the second query will be executed for each row in the first one. Since Daison supports arbitrary algebraic data types, this can be done in a better way with nested queries:
+```haskell
+runDaison db ReadMode $ do
+  select [(student_id,student,courses)
+              | (student_id,student) <- from students everything
+              , courses <- select (fromIndex course_student (at student_id))]
+```
+The result from this query will be a sequence of rows where each row will be about one student and will include the list of courses where he/she is enrolled.
 
 ### Update
 
