@@ -70,7 +70,7 @@ table :: String -> Table a
 ```
 takes a table name and returns a value of type Table. By default every table has an `Int64` primary key and arbitrary value as a content. If you need indices, then they must be added with the `withIndex` primitive:
 ```haskell
-withIndex :: Data.Data.Data b => Table a -> Index a b -> Table a
+withIndex :: Data b => Table a -> Index a b -> Table a
 ```
 The index itself is defined in one of three possible ways:
 
@@ -125,7 +125,28 @@ Finally if you want to remove a table just use `dropTable` or `tryDropTable`.
 
 ### Insert
 
-TODO...
+The simplest way to insert data in a table is the primitive:
+```haskell
+insert_ :: Data a => Table a -> a -> Daison (Key a)
+```
+It just takes a table and a value and inserts the new value in the table. The results is the value of the primary key. Here the type `Key a` is just a type synonym for a 64-bit integer:
+```haskell
+type Key a = Int64
+```
+
+A more advanced way is to use the equivalent for `INSERT-SELECT` in SQL:
+```haskell
+insert :: Data a => Table a -> Query a -> Daison (Key a, Key a)
+```
+Instead of a single value, this primitive takes a query which can extract data from other tables in order to prepare the values to be inserted in the target table. The query itself is a monadic function which is often conveniently expressed as a list comprehension. The result from `insert` is a pair of the initial and final primary keys, for the newly inserted rows. Here is an example:
+```haskell
+runDaison db ReadWriteMode $ do
+  (start,end) <- insert foo [f x | x <- from bar]
+  ...
+```
+where we take all values from table `bar`, we apply a transformation function `f`, and finally we insert the results in table `foo`.
+
+More details about queries follow.
 
 ### Select
 
