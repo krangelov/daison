@@ -1,13 +1,38 @@
 # The Daison Tutorial
 
-## Open a database
+Daison (DAta lISt comprehensiON) is a database where the data management language is Haskell instead of SQL. The main idea is that instead of SELECT statements, you use Haskell's List Comprehensions as generalized to monads by using the Monad Comprehension extension. The other benefit is that the database can store any serializable data type defined Haskell, this avoids the need to convert between Haskell types and SQL types for every query. An added benefit is that Daison naturally supports algebraic data types which is problematic in relational databases.
+
+The backend storage is SQLite from which I have stripped all SQL related features. The result is a simple key-value storage,  on top of which there is a Haskell API which replaces the SQL language. This gives us the efficiency and the reliability of an established database, but without the intermediatry of the SQL interpreter.
+
+The following tutorial will introduce how to perform different operations in Daison, sometimes with comparison with SQL.
+
+## Opening and closing a database
 
 Open and closing a database is simply:
 ```haskell
 main = do db <- openDB "student_database.db"
           closeDB db
 ```
-If a file with that name does not exist then a new database with that name will be created. The new database will not have any tables by default. You have to ask for the creation of each table separately. For example:
+If a file with that name does not exist then a new database with that name will be created. The new database will not have any tables by default. Like in SQL you have to create the tables by executing certain operations.
+
+## Transactions
+
+In order to do anything with a Daison database, you first need to start a transaction. This applies both to read-only as well as read-write operations. The backend allows multiple reader - single writer access. This means that even if you only read from the database, the engine must know when you are done in order to allow changes. What kind of access you need is described with `AccessMode` data type:
+```haskell
+data AccessMode = ReadWriteMode | ReadOnlyMode
+```
+
+The transaction itself is started by using:
+```haskell
+runDaison :: Database -> AccessMode -> Daison a -> IO a
+```
+This function takes a database and an access mode and performs an operation in the `Daison` monad. The operation can create/drop tables, query the data or modify the data. If the operation is performed without any exceptions, then the transaction will be automatically committed. In case of exceptions the transaction will be rolled back.
+
+## Defining and creating tables
+
+Although this is a NoSQL database it is still based on the concept of tables. A table however doesn't have any columns, it is just a list rows, where each row stores one Haskell value. The value, of course, could be of record type, so in that sense the Daison tables could have columns as well.
+
+Before we create a table, we need to define the data type for the rows:
 ```haskell
 data Student
   = Student 
@@ -15,28 +40,66 @@ data Student
      , code   :: Int
      , grades :: [Int]
      }
+     deriving Data
+```
+Note that you need to derive an instance of `Data`, since Daison uses it for generic serialization/deserialization.
 
-avg_grade :: Student -> Double
-avg_grade s = fromIntegral (sum (grades s)) / fromIntegral (length (grades s))
-
+Once you have all necessary data types, you can declare the associated tables and indices:
+```haskell
 students :: Table Student
 students = table "students"
            `withIndex` students_name
+           `withIndex` students_grade
            `withIndex` students_avg_grade
 
 students_name :: Index Student String
 students_name = index students "name" name
 
+students_grade :: Index Student Int
+students_grade = listIndex students "grade" grades
+
 students_avg_grade :: Index Student String
 students_avg_grade = index students "avg_grade" avg_grade
 
-main = do db <- openDB "student_database.db"
-          runDaison db ReadWriteMode $ do
-            createTable students
-          closeDB db
+avg_grade :: Student -> Double
+avg_grade s = fromIntegral (sum (grades s)) / fromIntegral (length (grades s))
 ```
+As you can see the tables/indices are just Haskell functions defined by using primitives from the Daison DSL. Here `table`:
+```haskell
+table :: String -> Table a
+```
+takes a table name and returns a value of type Table. By default every table has an `Int64` primary key and arbitrary value as a content. If you need indices, then they must be added with the `withIndex` primitive:
+```haskell
+withIndex :: Data.Data.Data b => Table a -> Index a b -> Table a
+```
+The index itself is defined in one of three possible ways:
 
-Using `createTable` creates the table in the database, but fails if a table with that name already exists. If you want to create a table only if it is not created yet then use `tryCreateTable` instead. Creating a table automatically creates all associated indices as well.
+- The simplest way is by using the `index` primitive:
+```haskell
+index :: Table a -> String -> (a -> b) -> Index a b
+```
+It takes a table, an index name and an arbitrary function which from a row value computes the value by which the row must be indexed. In the example above there two indexes of this kind - `students_name` and `students_avg_grade`. When the row value is of record type, it is natural that some of the indices will be over a particular field. This is the case with `students_name` but it does not have to be the case. Any function will work just as well. For example `students_avg_grade` indexes over the average grade which is not stored but is computed every time when a row is inserted or updated. In the SQL terminology this is called "computed index", which is supported by some databases but not all. In that case you need to define an appropriate function:
+
+- You can also index a row by more than one value by using the primitive:
+```haskell
+listIndex :: Table a -> String -> (a -> [b]) -> Index a b
+```
+In the above example we have the index `students_grade` which lets you to search for students who got a particular grade. This kind of indices does not have correspondence in SQL since in (most) relational databases you cannot store lists.
+
+- A special case is when you want to index some rows but not all. This is possible with the primitive:
+```haskell
+maybeIndex :: Table a -> String -> (a -> Maybe b) -> Index a b
+```
+when the indexing function returns `Nothing` then the current row will be skipped from the index. This is equivalent to an index over a nullable column in SQL.
+
+Finally, when a tables is defined, you must also create it. The definitions above are just Haskell functions and they do not do anything with the database. You should call `createTable` explicitly:
+```haskell
+runDaison db ReadWriteMode $ do
+  createTable students
+```
+This creates both the table and the indices which are associated with that table. Note that since this operation changes the database, it must be executed within a read-write transaction.
+
+If a table with that name already exists, `createTable` will fail. If you want to create a table only if it is not created yet then use `tryCreateTable` instead.
 
 After a table is created you can rename it:
 ```haskell
@@ -53,84 +116,9 @@ runDaison db ReadWriteMode $ do
 where
   modify = ...
 ```
-Here you need the definitions of two tables `foo :: Table a` and `bar :: Table b`, and a function `modify :: a -> b`.
+Here you need the definitions of two tables `foo :: Table a` and `bar :: Table b`, and a function `modify :: a -> b` which transforms the old values into the new ones.
 
 Finally if you want to remove a table just use `dropTable` or `tryDropTable`.
-
-
-## Defining Tables
-
-Before you define a table in Daison you first need to declare the necessary Haskell data types, for example:
-```haskell
-data Student
-  = Student 
-     { name   :: String
-     , code   :: Int
-     , grades :: [Int]
-     }
-```
-after that you define the table itself as a Haskell function:
-```haskell
-students :: Table Student
-students = table "students"
-```
-
-If the only thing that you need to store for a student is his/her name, code and grades then a plain tuple would work just as well:
-```haskell
-students :: Table (String,Int,[Int])
-students = table "students"
-```
-However, in the long run using custom data types is more convenient than using tuples.
-
-The whole point of a database is that we should be able to quickly find the information that we need. For that purpose we create search indices over the tables. In Daison a record can be indexed over the result of an arbitrary function applied to that record. The index itself is defined as yet another Haskell function:
-```haskell
-students_name :: Index Student String
-students_name = index students "name" name
-```
-The example above defines an index by name over the table of students. Note, however, that `name` is nothing else but a record selector, i.e. a function from `Student` to `String`. In principle we could use any function, for instance indexing over the average grade would look like this:
-```haskell
-avg_grade :: Student -> Double
-avg_grade s = fromIntegral (sum (grades s)) / fromIntegral (length (grades s))
-
-students_avg_grade :: Index Student Double
-students_avg_grade = index students "avg_grade" avg_grade
-```
-
-The above definitions defined the indices, but they would not be populated unless if you explicitly ask for that in the table definition:
-```haskell
-students :: Table Student
-students = table "students"
-           `withIndex` students_name
-           `withIndex` students_avg_grade
-```
-
-It is possible to index a single record with more than one value. For instance, if we want to get all students who ever got a grade 5 we should use the index:
-```haskell
-students_grade :: Index Student Int
-students_grade = listIndex students "grade" grades
-```
-Here function `listIndex` expects in the third argument a function of type `Student -> [Int]` and indexes every record under any of the values in the result list. Similarly you can use `maybeIndex` if you want to put only some records in the index:
-```haskell
-maybeHead :: [a] -> Maybe a
-maybeHead []    = Nothing
-maybeHead (x:_) = Just x
-
-students_first_grade :: Index Student Int
-students_first_grade = maybeIndex students "first_grade" (maybeHead . grades)
-```
-
-## Transactions
-
-In order to anything with a Daison database, you first need to start a transaction. The SQLite backend supports multiple readers/single writer access. Correspondingly there are read-only and read-write transactions. This is reflected with the `AccessMode` data type:
-```haskell
-data AccessMode = ReadWriteMode | ReadOnlyMode
-```
-
-The transaction itself is started by using:
-```haskell
-runDaison :: Database -> AccessMode -> Daison a -> IO a
-```
-This function takes a database and an access mode and performs an operation in the `Daison` monad. The operation can create/drop tables, query the data or modify the data. If the operation is performed without any exceptions, then the transaction will be automatically committed. In case of exceptions the transaction will be rolled back.
 
 
 ## Access the Data
