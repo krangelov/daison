@@ -326,6 +326,7 @@ data Course
       { title       :: String
       , student_ids :: [Key Student]
       }
+     deriving Data
       
 courses :: Table Course
 courses = table "courses"
@@ -398,4 +399,56 @@ delete_ students (return 1)
 
 ## Foreign Keys
 
-TODO...
+In relational databases, the only way to store complex data structures is to decompose them into tables which are joined with each other. In order to ensure consistencies, the possible joins are described with foreign keys. Daison supports algebraic data types and this means that the need for joined tables is lower but it is still useful. For example, if there are several references to one and the same data, then it is better to store it in one table and then refer to it only by key. For that reason Daison also supports foreign keys.
+
+Here is a modified version of the example with the students and the courses:
+```haskell
+data Student
+  = Student 
+     { name   :: String
+     , code   :: Int
+     , grades :: [(Key Course,Int)]
+     }
+     deriving Data
+
+data Course
+  = Course
+      { title :: String
+      }
+     deriving Data
+      
+students :: Table Student
+students = table "students"
+           `withIndex` students_name
+           `withIndex` students_course
+           `withIndex` students_grade
+
+students_name :: Index Student String
+students_name = index students "name" name
+
+students_course :: Index Student (Key Course)
+students_course = listIndex students "course" (map fst . grades)
+
+students_grade  :: Index Student Int
+students_grade  = listIndex students "grade"  (map snd . grades)
+
+courses :: Table Course
+courses = table "courses"
+          `withForeignKey` students_course
+```
+In this version, for each student we store not just a list of grades but also the ids of the corresponding courses. This means that by loading the data for a student, we immediately see in which courses he/she is involved. There is still an index `students_course` which lets us to quickly do the opposite, i.e. find which students are involve in a given course.
+
+The problem is that if someone deletes a course the data for all involved students will hold a dangling key to a non existent course. This is solved by using the primitive:
+```haskell
+withForeignKey :: Table a -> Index b (Key a) -> Table a
+```
+on the `courses` table. This tells Daison that whenever someone deletes a course it must check in the given index whether there is a student refering to that course. If there are reference, an exception will be thrown which will also roll back the transaction.
+
+Sometimes we don't want to disable the deletion, since another way to keep the consistancy is to change the refences. For that purpose there are two more primitives:
+```haskell
+withCascadeDelete :: Data b => Table a -> Index b (Key a) -> Table a
+withCascadeUpdate :: Data b => Table a -> (Index b (Key a), Key a -> b -> b) -> Table a
+```
+If we had used cascade deletion, then together with the deleted course Daison will also automatically delete all students who are enrolled in the course. Cascade update on the other hand will update the rows for all enrolled students with the provided function. For instance the function can remove the reference to that course together with the grade.
+
+Neither the cascade delete nor the cascade update scenario are good designs for the students example, but they are useful in other cases. Consider for instance that we store books and chapter titles. Each chapter belongs to a given book, so if we delete a book then it makes sense to delete the associated chapters as well.
