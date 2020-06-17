@@ -14,8 +14,8 @@ main = do
   x <- runDaison db ReadWriteMode $ do
          --dropTable people
          tryCreateTable people
-         insert people ("Aga",15)
-         insert people ("Henry",22)
+         insert people (return ("Aga",15))
+         insert people (return ("Aga",15))
          --update people2 (\_ (name,age,x) -> (name,age,10))
            --             (from people2)
          select [x | x <- from people everything]
