@@ -141,7 +141,7 @@ JNIEXPORT void JNICALL Java_org_daison_Database_fetchSchema
    	jfieldID schemaId = (*env)->GetFieldID(env, self_class, "schema", "Ljava/util/Map;");
 	jobject schema = (*env)->GetObjectField(env, self, schemaId);
 	jmethodID clearId = (*env)->GetMethodID(env, (*env)->GetObjectClass(env, schema), "clear", "()V");
-	(*env)->CallObjectMethod(env, schema, clearId);
+	(*env)->CallVoidMethod(env, schema, clearId);
 
 	BtCursor* pCursor;
 	rc = sqlite3BtreeCursor(pBtree, 1, 0, 0, 0, &pCursor);
@@ -178,7 +178,7 @@ JNIEXPORT void JNICALL Java_org_daison_Database_fetchSchema
         const void *ptr = 
 			sqlite3BtreeDataFetch(pCursor, &size);
 
-		(*env)->CallObjectMethod(env, self, registerTableId, key, ptr, size);
+		(*env)->CallVoidMethod(env, self, registerTableId, key, ptr, size);
 		if ((*env)->ExceptionCheck(env)) {
 			sqlite3BtreeCloseCursor(pCursor);
 			return;
