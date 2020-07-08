@@ -27,10 +27,10 @@ LIBTOOL = $(if $(shell command -v glibtool 2>/dev/null), glibtool, libtool)  --t
 java: libjdaison.la jdaison.jar
 
 libjdaison.la: $(patsubst %.c, %.lo, $(C_SOURCES))
-	$(LIBTOOL) --mode=link $(GCC) $(CFLAGS) -g3 -O0 -o libjdaison.la -shared $^ -rpath $(INSTALL_PATH)/lib $(WINDOWS_LDFLAGS)
+	$(LIBTOOL) --mode=link $(GCC) $(CFLAGS) -O2 -o libjdaison.la -shared $^ -rpath $(INSTALL_PATH)/lib $(WINDOWS_LDFLAGS)
 
 %.lo : %.c
-	$(LIBTOOL) --mode=compile $(GCC) $(CFLAGS) -g3 -O0 -c $(JNI_INCLUDES) -Ic $(WINDOWS_CCFLAGS) -std=c99 -shared $< -o $@
+	$(LIBTOOL) --mode=compile $(GCC) $(CFLAGS) -O2 -c $(JNI_INCLUDES) -Ic $(WINDOWS_CCFLAGS) -std=c99 -shared $< -o $@
 
 jdaison.jar: $(patsubst %.java, %.class, $(JAVA_SOURCES))
 	jar -cf $@ $(patsubst java/%, -C java '%', $(wildcard java/org/daison/*.class))
