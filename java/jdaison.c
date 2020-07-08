@@ -178,7 +178,7 @@ JNIEXPORT void JNICALL Java_org_daison_Database_fetchSchema
         const void *ptr = 
 			sqlite3BtreeDataFetch(pCursor, &size);
 
-		(*env)->CallVoidMethod(env, self, registerTableId, key, ptr, size);
+		(*env)->CallVoidMethod(env, self, registerTableId, key, p2l(ptr), size);
 		if ((*env)->ExceptionCheck(env)) {
 			sqlite3BtreeCloseCursor(pCursor);
 			return;
