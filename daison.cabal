@@ -10,7 +10,7 @@ library
   build-depends:       base >=4.3, binary >= 0.8.4.0, syb, bytestring, containers
   default-language:    Haskell2010
   build-tools:         hsc2hs
-  c-sources:           src/sqlite3Btree.c
-  include-dirs:        src
-  hs-source-dirs:      src
+  c-sources:           c/sqlite3Btree.c
+  include-dirs:        c
+  hs-source-dirs:      haskell
   extra-libraries: pthread
