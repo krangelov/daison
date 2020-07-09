@@ -356,17 +356,17 @@ class DataStream implements Closeable {
 	}
 
 	public <A> A get(Class<A> cls) throws SerializationException {
-		if (cls.isAssignableFrom(Byte.class)) {
+		if (cls.isAssignableFrom(Byte.class) || cls.isAssignableFrom(byte.class)) {
 			return (A) Byte.valueOf(getByte());
-		} else if (cls.isAssignableFrom(Short.class)) {
+		} else if (cls.isAssignableFrom(Short.class) || cls.isAssignableFrom(short.class)) {
 			return (A) Short.valueOf(getShort());
-		} else if (cls.isAssignableFrom(Integer.class)) {
+		} else if (cls.isAssignableFrom(Integer.class) || cls.isAssignableFrom(int.class)) {
 			return (A) Integer.valueOf(getInt());
-		} else if (cls.isAssignableFrom(Long.class)) {
+		} else if (cls.isAssignableFrom(Long.class) || cls.isAssignableFrom(long.class)) {
 			return (A) Long.valueOf(getLong());
-		} else if (cls.isAssignableFrom(Double.class)) {
+		} else if (cls.isAssignableFrom(Double.class) || cls.isAssignableFrom(double.class)) {
 			return (A) Double.valueOf(getDouble());
-		} else if (cls.isAssignableFrom(Float.class)) {
+		} else if (cls.isAssignableFrom(Float.class) || cls.isAssignableFrom(float.class)) {
 			return (A) Float.valueOf(getFloat());
 		} else if (cls.isAssignableFrom(String.class)) {
 			return (A) getString();
