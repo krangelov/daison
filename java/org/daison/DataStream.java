@@ -247,6 +247,7 @@ class DataStream implements Closeable {
 	}
 
 	private void setField(Object o, Field field) throws IllegalAccessException, SerializationException {
+		System.out.println(field.getName());
 		Class fieldCls = field.getType();
 		DaisonMaybeField mb = field.getAnnotation(DaisonMaybeField.class);
 
@@ -260,17 +261,17 @@ class DataStream implements Closeable {
 				throw new SerializationException("Constructor tag "+j+" out of bounds for DaisonMaybeField");
 			}
 			getEnd();
-		} else if (fieldCls.isAssignableFrom(Byte.class)) {
+		} else if (fieldCls.isAssignableFrom(Byte.class) || fieldCls.isAssignableFrom(byte.class)) {
 			field.setByte(o, getByte());
-		} else if (fieldCls.isAssignableFrom(Short.class)) {
+		} else if (fieldCls.isAssignableFrom(Short.class) || fieldCls.isAssignableFrom(short.class)) {
 			field.setShort(o, getShort());
-		} else if (fieldCls.isAssignableFrom(Integer.class)) {
+		} else if (fieldCls.isAssignableFrom(Integer.class) || fieldCls.isAssignableFrom(int.class)) {
 			field.setInt(o, getInt());
-		} else if (fieldCls.isAssignableFrom(Long.class)) {
+		} else if (fieldCls.isAssignableFrom(Long.class) || fieldCls.isAssignableFrom(long.class)) {
 			field.setLong(o, getLong());
-		} else if (fieldCls.isAssignableFrom(Double.class)) {
+		} else if (fieldCls.isAssignableFrom(Double.class) || fieldCls.isAssignableFrom(double.class)) {
 			field.setDouble(o, getDouble());
-		} else if (fieldCls.isAssignableFrom(Float.class)) {
+		} else if (fieldCls.isAssignableFrom(Float.class) || fieldCls.isAssignableFrom(float.class)) {
 			field.setFloat(o, getFloat());
 		} else if (fieldCls.isAssignableFrom(String.class)) {
 			field.set(o, getString());
