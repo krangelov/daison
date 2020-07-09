@@ -88,29 +88,232 @@ throw_rc_exception(JNIEnv *env, int rc)
 	(*env)->Throw(env, exception);
 }
 
-JNIEXPORT void JNICALL Java_org_daison_Database_open
-  (JNIEnv *env, jobject self, jstring path)
+JNIEXPORT jlong JNICALL Java_org_daison_Database_openFile
+  (JNIEnv *env, jobject self, jstring j_fpath)
 {
 	int rc;
 
-	const char *fpath = (*env)->GetStringUTFChars(env, path, 0); 
+	const char *fpath = (*env)->GetStringUTFChars(env, j_fpath, 0);
 
 	Btree* pBtree = NULL;
-	rc = sqlite3BtreeOpen(NULL, fpath, &pBtree, 0, 
+	rc = sqlite3BtreeOpen(NULL, fpath, &pBtree, 0,
 	                      SQLITE_OPEN_READWRITE | 
 	                      SQLITE_OPEN_CREATE | 
 	                      SQLITE_OPEN_MAIN_DB);
 
-	(*env)->ReleaseStringUTFChars(env, path, fpath);
-	
+	(*env)->ReleaseStringUTFChars(env, j_fpath, fpath);
+
 	if (rc != SQLITE_OK) {
 		throw_rc_exception(env, rc);
-		return;
+		return 0;
 	}
 
-	jfieldID refId = (*env)->GetFieldID(env, (*env)->GetObjectClass(env, self), "ref", "J");
-	(*env)->SetLongField(env, self, refId, p2l(pBtree));
+	return p2l(pBtree);
 }
+
+#ifdef __ANDROID__
+
+#include <unistd.h>
+#include <android/log.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
+
+#define LOG_TAG "sqlite3Btree"
+#define LOG_DEBUG(msg, args...) \
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, msg, ##args)
+#define LOG_INFO(msg, args...) \
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, msg, ##args)
+#define LOG_ERROR(msg, args...) \
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, msg, ##args)
+#define LOG_FATAL(msg, args...) \
+    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, msg, ##args)
+
+typedef struct {
+	sqlite3_io_methods const *pMethods;
+	int fd;
+	sqlite3_int64 offset;
+	sqlite3_int64 length;
+} assetFile;
+
+static int assetRead(sqlite3_file *file, void *buf, int iAmt, sqlite3_int64 iOfst) {
+    assetFile *f = (assetFile *) file;
+    int expectReadLen = (iAmt + iOfst > f->length) ? (f->length - iOfst) : iAmt;
+    int readLen = pread64(f->fd, buf, expectReadLen, iOfst + f->offset);
+    if (readLen < 0) {
+        return SQLITE_IOERR_READ;
+    } else if (readLen == expectReadLen) {
+        return SQLITE_OK;
+    } else {
+        memset((__uint8_t *) buf + readLen, 0, iAmt - readLen);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+}
+
+static int assetClose(sqlite3_file *vfs_file) {
+    assetFile *file = (assetFile *) vfs_file;
+    close(file->fd);
+    file->fd = 0;
+    return SQLITE_OK;
+}
+
+static int assetWrite(sqlite3_file *vfs_file, const void *foo, int iAmt, sqlite3_int64 iOfst) {
+    return SQLITE_READONLY;
+}
+
+
+static int assetTruncate(sqlite3_file *vfs_file, sqlite3_int64 size) {
+    return SQLITE_READONLY;
+}
+
+
+static int assetSync(sqlite3_file *vfs_file, int flags) {
+    /* Does nothing. */
+    return SQLITE_OK;
+}
+
+
+static int assetFileSize(sqlite3_file *vfs_file, sqlite3_int64 *pSize) {
+    assetFile *file = (assetFile *)vfs_file;
+    *pSize = file->length;
+    return SQLITE_OK;
+}
+
+
+static int assetLock(sqlite3_file *vfs_file, int mode) {
+    /* Does nothing. */
+    return SQLITE_OK;
+}
+
+
+static int assetUnlock(sqlite3_file *vfs_file, int mode) {
+    /* Does nothing. */
+    return SQLITE_OK;
+}
+
+
+static int assetCheckReservedLock(sqlite3_file *vfs_file, int *pResOut) {
+    *pResOut = 0;
+    return SQLITE_OK;
+}
+
+
+static int assetFileControl(sqlite3_file *vfs_file, int op, void *pArg) {
+    return SQLITE_NOTFOUND;
+}
+
+
+static int assetSectorSize(sqlite3_file *vfs_file) {
+    /* Not applicable, so just return a "minimum write size" of 0 bytes. */
+    return 0;
+}
+
+
+static int assetDeviceCharacteristics(sqlite3_file *vfs_file) {
+    /* Not applicable, so return an empty set of characteristics. */
+    return 0;
+}
+
+
+static const sqlite3_io_methods androidIoMethods = {
+   1,                          /* iVersion */
+   assetClose,                 /* xClose */
+   assetRead,                  /* xRead */
+   assetWrite,                 /* xWrite */
+   assetTruncate,              /* xTruncate */
+   assetSync,                  /* xSync */
+   assetFileSize,              /* xFileSize */
+   assetLock,                  /* xLock */
+   assetUnlock,                /* xUnlock */
+   assetCheckReservedLock,     /* xCheckReservedLock */
+   assetFileControl,           /* xFileControl */
+   assetSectorSize,            /* xSectorSize */
+   assetDeviceCharacteristics, /* xDeviceCapabilities */
+};
+
+static int assetOpen(
+  sqlite3_vfs *pVfs,           /* The VFS for which this is the xOpen method */
+  const char *zPath,           /* Pathname of file to be opened */
+  sqlite3_file *pFile,         /* The file descriptor to be filled in */
+  int flags,                   /* Input flags to control the opening */
+  int *pOutFlags               /* Output flags returned to SQLite core */
+){
+    assetFile *f = (assetFile *) pFile;
+    f->pMethods = &androidIoMethods;
+    if (3 > sscanf(zPath, "%x_%llx_%llx", &f->fd, &f->offset, &f->length)) {
+        return SQLITE_ERROR;
+    }
+    *pOutFlags = flags;
+    return SQLITE_OK;
+}
+
+static int assetDelete(sqlite3_vfs *vfs, const char *zName, int syncDir) {
+    return SQLITE_ERROR;            // Assets cannot be deleted.
+}
+
+static int assetAccess(sqlite3_vfs *vfs, const char *zName, int flags, int *pResOut) {
+    *pResOut = 0;
+    return SQLITE_OK;
+}
+
+static int assetFullPathname(sqlite3_vfs *vfs, const char *zName, int nOut, char *zOut) {
+    strncpy(zOut, zName, nOut);
+    return SQLITE_OK;
+}
+
+static sqlite3_vfs android_asset_vfs = {
+    2,                    /* iVersion */
+    sizeof(assetFile),    /* szOsFile */
+    512,                  /* mxPathname */
+    0,                    /* pNext */
+    "android-asset",      /* zName */
+    NULL,                 /* pAppData */
+    assetOpen,            /* xOpen */
+    assetDelete,          /* xDelete */
+    assetAccess,          /* xAccess */
+    assetFullPathname,    /* xFullPathname */
+    };
+
+JNIEXPORT jlong JNICALL Java_org_daison_Database_openAsset
+  (JNIEnv *env, jobject self, jobject j_assetManager, jstring j_fpath)
+{
+	AAssetManager *assetManager =
+		AAssetManager_fromJava(env, j_assetManager);
+
+	const char *fpath = (*env)->GetStringUTFChars(env, j_fpath, 0);
+	AAsset *asset = AAssetManager_open(assetManager,
+	                                   fpath, AASSET_MODE_RANDOM);
+	(*env)->ReleaseStringUTFChars(env, j_fpath, fpath);
+
+	if (asset == NULL)
+		return 0;
+
+	off64_t offset, length;
+	int fd = AAsset_openFileDescriptor64(asset, &offset, &length);
+
+	AAsset_close(asset);
+
+	if (fd < 0)
+		return 0;
+
+	char asset_id[64];
+	snprintf(asset_id, sizeof(asset_id),
+	        "%x_%llx_%llx", fd, offset, length);
+
+	sqlite3_vfs_register(&android_asset_vfs, 0);
+
+	Btree* pBtree = NULL;
+	int rc = sqlite3BtreeOpen("android-asset", asset_id, &pBtree, 0,
+	                          SQLITE_OPEN_READWRITE |
+	                          SQLITE_OPEN_CREATE |
+	                          SQLITE_OPEN_MAIN_DB);
+	if (rc != SQLITE_OK) {
+		throw_rc_exception(env, rc);
+		return 0;
+	}
+
+	return p2l(pBtree);
+}
+#endif
 
 JNIEXPORT jstring JNICALL Java_org_daison_DaisonException_errName
   (JNIEnv *env, jclass cls, jint rc)
@@ -315,7 +518,7 @@ JNIEXPORT jint JNICALL Java_org_daison_Database_getDataSize
 	int rc;
 	BtCursor* pCursor = (BtCursor*) l2p(cursorRef);
 
-	int size;
+	u32 size;
 	rc = sqlite3BtreeDataSize(pCursor, &size);
 	if (rc != SQLITE_OK) {
 		throw_rc_exception(env, rc);

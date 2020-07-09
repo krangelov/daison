@@ -10,10 +10,23 @@ public class Database implements Closeable {
 	private Map<String, SchemaEntry> schema;
 
 	public Database(File file) throws DaisonException {
+		ref = openFile(file.getPath());
+		initSchema();
+	}
+
+	public Database(Object assetManager, String path) throws DaisonException {
+		ref = openAsset(assetManager, path);
+		initSchema();
+	}
+
+	private native long openFile(String filePath) throws DaisonException;
+	private native long openAsset(Object assetManager, String path) throws DaisonException;
+	private native void fetchSchema() throws DaisonException;
+	public native void close() throws DaisonException;
+
+	private void initSchema() {
 		cookie = -1;
 		schema = new HashMap<String,SchemaEntry>();
-
-		open(file.getPath());
 
 		openTransaction(0);
 
@@ -23,10 +36,6 @@ public class Database implements Closeable {
 			commitTransaction();
 		}
 	}
-
-	private native void open(String filePath) throws DaisonException;
-	private native void fetchSchema() throws DaisonException;
-	public native void close() throws DaisonException;
 
 	private void registerTable(long id, long bufRef, int size) throws SerializationException {
 		DataStream stream = new DataStream(bufRef, size);

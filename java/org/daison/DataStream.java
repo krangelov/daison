@@ -247,7 +247,6 @@ class DataStream implements Closeable {
 	}
 
 	private void setField(Object o, Field field) throws IllegalAccessException, SerializationException {
-		System.out.println(field.getName());
 		Class fieldCls = field.getType();
 		DaisonMaybeField mb = field.getAnnotation(DaisonMaybeField.class);
 
