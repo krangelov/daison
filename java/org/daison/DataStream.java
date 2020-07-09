@@ -246,6 +246,43 @@ class DataStream implements Closeable {
 		getVInt(Tag.End);
 	}
 
+	private void setField(Object o, Field field) throws IllegalAccessException, SerializationException {
+		Class fieldCls = field.getType();
+		DaisonMaybeField mb = field.getAnnotation(DaisonMaybeField.class);
+
+		if (mb != null) {
+			int j = getConstructor();
+			if (j == 1) {
+				field.set(o, null);
+			} else if (j == 2) {
+				field.set(o, get(fieldCls));
+			} else {
+				throw new SerializationException("Constructor tag "+j+" out of bounds for DaisonMaybeField");
+			}
+			getEnd();
+		} else if (fieldCls.isAssignableFrom(Byte.class)) {
+			field.setByte(o, getByte());
+		} else if (fieldCls.isAssignableFrom(Short.class)) {
+			field.setShort(o, getShort());
+		} else if (fieldCls.isAssignableFrom(Integer.class)) {
+			field.setInt(o, getInt());
+		} else if (fieldCls.isAssignableFrom(Long.class)) {
+			field.setLong(o, getLong());
+		} else if (fieldCls.isAssignableFrom(Double.class)) {
+			field.setDouble(o, getDouble());
+		} else if (fieldCls.isAssignableFrom(Float.class)) {
+			field.setFloat(o, getFloat());
+		} else if (fieldCls.isAssignableFrom(String.class)) {
+			field.set(o, getString());
+		} else if (fieldCls.isArray()) {
+			field.set(o, getArray(fieldCls.getComponentType()));
+		} else if (fieldCls.isEnum()) {
+			field.set(o, getEnum(fieldCls));
+		} else {
+			field.set(o, getObject(fieldCls));
+		}
+	}
+
 	private void setAllFields(Object o, Class cls) throws IllegalAccessException, SerializationException {
 		if (cls == null)
 			return;
@@ -254,41 +291,14 @@ class DataStream implements Closeable {
 
 		for (Field field : cls.getDeclaredFields()) {
 			if ((field.getModifiers() & (Modifier.TRANSIENT | Modifier.STATIC)) == 0) {
-				Class fieldCls = field.getType();
-				DaisonMaybeField mb = field.getAnnotation(DaisonMaybeField.class);
-
-				if (mb != null) {
-					int j = getConstructor();
-					if (j == 1) {
-						field.set(o, null);
-					} else if (j == 2) {
-						field.set(o, get(fieldCls));
-					} else {
-						throw new SerializationException("Constructor tag "+j+" out of bounds for DaisonMaybeField");
-					}
-					getEnd();
-				} else if (fieldCls.isAssignableFrom(Byte.class)) {
-					field.setByte(o, getByte());
-				} else if (fieldCls.isAssignableFrom(Short.class)) {
-					field.setShort(o, getShort());
-				} else if (fieldCls.isAssignableFrom(Integer.class)) {
-					field.setInt(o, getInt());
-				} else if (fieldCls.isAssignableFrom(Long.class)) {
-					field.setLong(o, getLong());
-				} else if (fieldCls.isAssignableFrom(Double.class)) {
-					field.setDouble(o, getDouble());
-				} else if (fieldCls.isAssignableFrom(Float.class)) {
-					field.setFloat(o, getFloat());
-				} else if (fieldCls.isAssignableFrom(String.class)) {
-					field.set(o, getString());
-				} else if (fieldCls.isArray()) {
-					field.set(o, getArray(fieldCls.getComponentType()));
-				} else if (fieldCls.isEnum()) {
-					field.set(o, getEnum(fieldCls));
-				} else {
-					field.set(o, getObject(fieldCls));
-				}
+				setField(o, field);
 			}
+		}
+	}
+
+	private void setFields(Object o, String[] fields) throws IllegalAccessException, SerializationException, NoSuchFieldException {
+		for (String fieldName : fields) {
+			setField(o, o.getClass().getDeclaredField(fieldName));
 		}
 	}
 
@@ -308,14 +318,21 @@ class DataStream implements Closeable {
 			con = cons[i];
 		}
 
+		DaisonDataFields dataFields = (DaisonDataFields) con.getAnnotation(DaisonDataFields.class);
+
 		try {
 			Object o = con.newInstance();
-			setAllFields(o,con);
+			if (dataFields == null)
+				setAllFields(o,con);
+			else
+				setFields(o,dataFields.fields());
 			getEnd();
 			return (A) o;
 		} catch (InstantiationException e) {
 			throw new SerializationException(e);
 		} catch (IllegalAccessException e) {
+			throw new SerializationException(e);
+		} catch (NoSuchFieldException e) {
 			throw new SerializationException(e);
 		}
 	}
