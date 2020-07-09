@@ -203,7 +203,7 @@ JNIEXPORT void JNICALL Java_org_daison_Database_close
   (JNIEnv *env, jobject self)
 {
 	Btree* btree = get_ref(env, self);
-	if (btree != NULL);
+	if (btree != NULL)
 		sqlite3BtreeClose(btree);
 }
 
