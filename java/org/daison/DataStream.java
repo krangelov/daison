@@ -96,9 +96,9 @@ class DataStream implements Closeable {
 		int rbits = 7-tag.bits;
 		long n0   = (n & ((1 << rbits) - 1)) << (tag.bits+1);
         long n1   = n >> rbits;
-		if ((n1 == 0 && ((n0 & 0x80) == 0)) || (n1 == -1 && ((n0 & 0x80) != 0)))
+		if ((n1 == 0 && ((n0 & 0x80) == 0)) || (n1 == -1 && ((n0 & 0x80) != 0))) {
 			putRawByte((byte) (n0 | tag.code));
-		else {
+		} else {
 			putRawByte((byte) (n0 | (1 << tag.bits) | tag.code));
 			putRest(n1);
 		}
@@ -106,7 +106,7 @@ class DataStream implements Closeable {
 
 	private void putRest(long n) throws SerializationException {
 		for (;;) {
-			long n0 = (long) ((n & (1 << 7 - 1)) << 1);
+			long n0 = (long) ((n & ((1 << 7) - 1)) << 1);
 			long n1 = n >> 7;
 			if ((n1 == 0 && ((n0 & 0x80) == 0)) || (n1 == -1 && ((n0 & 0x80) != 0))) {
 				putRawByte((byte) n0);

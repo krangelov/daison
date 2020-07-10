@@ -33,7 +33,7 @@ libjdaison.la: $(patsubst %.c, %.lo, $(C_SOURCES))
 	$(LIBTOOL) --mode=compile $(GCC) $(CFLAGS) -O2 -c $(JNI_INCLUDES) -Ic $(WINDOWS_CCFLAGS) -std=c99 -shared $< -o $@
 
 jdaison.jar: $(patsubst %.java, %.class, $(JAVA_SOURCES))
-	jar -cf $@ $(patsubst java/%, -C java '%', $(wildcard java/org/daison/*.class))
+	jar -cvf $@ $(patsubst java/%, -C java '%', $(wildcard java/org/daison/*.class))
 
 %.class : %.java
 	javac $< -Xlint:deprecation -cp java -h java/
