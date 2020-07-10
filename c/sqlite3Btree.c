@@ -40344,7 +40344,7 @@ SQLITE_PRIVATE i64 getVInt(const unsigned char** p, int bits, i64 v)
 		unsigned char c = *(*p)++;
 		if ((c & 1) == 0) {
 			v |= ((i64) c) << bits;
-			if (c & 0x80 != 0)
+			if ((c & 0x80) != 0)
 				v |= (-128) << bits;
 			break;
 		} else {
@@ -40497,8 +40497,8 @@ SQLITE_PRIVATE i64 sqlite3BtreeRecordCompareHelper(
 				*errCode = SQLITE_CORRUPT;
 				return 1;
 			}
-			*pCell++;
-			*pKey++;
+            (*pCell)++;
+            (*pKey)++;
 
 			return 0;
 		}
