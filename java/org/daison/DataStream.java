@@ -190,10 +190,10 @@ class DataStream implements Closeable {
 		long len = getVInt(Tag.Str);
 		char[] chars = new char[(int) len*2];
 
-		int i     = 0;
+		int i = 0;
 		for (int count = 0; count < len; count++) {
 			int ucs;
-			byte c = getRawByte();
+			int c = getRawByte() & 0xFF;
 			if (c < 0x80) {
 				ucs = c;
 			} else {
@@ -206,11 +206,10 @@ class DataStream implements Closeable {
 				long mask = 0x0103070F1f7fL;
 				ucs = c & ((int) (mask >> (num * 8)));
 				for (int k = 1; k <= num; k++) {
-					c = getRawByte();
+					c = getRawByte() & 0xFF;
 					ucs = ucs << 6 | (c & 0x3f);
 				}
 			}
-	
 			if (ucs <= 0xFFFF) {
 				chars[i++] = (char) ucs;
 			} else {
