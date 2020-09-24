@@ -15,7 +15,6 @@
 ** of the embedded sqliteBtree.h header file.)
 */
 #define SQLITE_CORE 1
-#define SQLITE_AMALGAMATION 1
 #ifndef SQLITE_PRIVATE
 # define SQLITE_PRIVATE static
 #endif
@@ -4230,13 +4229,6 @@ struct Sqlite3Config {
 #endif
   int bLocaltimeFault;              /* True to fail localtime() calls */
 };
-
-#ifndef SQLITE_AMALGAMATION
-SQLITE_PRIVATE SQLITE_WSD struct Sqlite3Config sqlite3Config;
-#ifndef SQLITE_OMIT_WSD
-SQLITE_PRIVATE int sqlite3PendingByte;
-#endif
-#endif
 
 #if (defined(i386)     || defined(__i386__)   || defined(_M_IX86) ||    \
      defined(__x86_64) || defined(__x86_64__) || defined(_M_X64)  ||    \
