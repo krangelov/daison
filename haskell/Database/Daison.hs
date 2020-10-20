@@ -159,6 +159,7 @@ instance Applicative Daison where
   f <*> g = Daison (\db -> doTransaction f db <*> doTransaction g db)
 
 instance Monad Daison where
+  fail msg = Daison (\db -> fail msg)
   return x = Daison (\db -> return x)
   f >>= g  = Daison (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
 
@@ -502,6 +503,7 @@ instance Alternative Query where
   f <|> g = mplus f g
 
 instance Monad Query where
+  fail _    = mzero
   return x  = Query (\pBtree schema  -> return (Output x nilQSeq done))
   f >>= g   = Query (\pBtree schema  -> doQuery f pBtree schema  >>= loop pBtree schema)
     where
