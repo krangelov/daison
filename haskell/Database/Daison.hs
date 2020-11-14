@@ -614,7 +614,7 @@ foldRows f x = Aggregator (\r -> r >>= loop x)
 foldRows1 :: (a -> a -> a) -> Aggregator a a
 foldRows1 f = Aggregator (\r -> r >>= first)
   where
-    first Done           = fail "foldl1Q: empty sequence"
+    first Done           = fail "foldRows1: empty sequence"
     first (Output x r _) = r >>= loop x
 
     loop !x Done           = return x
