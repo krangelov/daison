@@ -54,6 +54,7 @@ import qualified Data.List as List
 import Control.Exception(Exception,throwIO,bracket,bracket_,onException)
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Fail as Fail
 import Control.Monad.IO.Class
 
 import Database.Daison.FFI
@@ -159,9 +160,12 @@ instance Applicative Daison where
   f <*> g = Daison (\db -> doTransaction f db <*> doTransaction g db)
 
 instance Monad Daison where
-  fail msg = Daison (\db -> fail msg)
+  fail msg = Daison (\db -> Fail.fail msg)
   return x = Daison (\db -> return x)
   f >>= g  = Daison (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
+
+instance MonadFail Daison where
+  fail msg = Daison (\db -> Fail.fail msg)
 
 instance MonadIO Daison where
   liftIO f = Daison (\db -> f)
@@ -513,6 +517,9 @@ instance Monad Query where
           append Done                 = f' >>= loop pBtree schema
           append (Output x rest done) = return (Output x (rest >>= append) (done0 >> done))
 
+instance MonadFail Query where
+  fail _    = mzero
+
 instance MonadPlus Query where
   mzero     = Query (\pBtree schema -> return Done)
   mplus f g = Query (\pBtree schema -> 
@@ -567,13 +574,13 @@ distinctRows = Aggregator (\r -> r >>= loop)
 firstRow :: Aggregator a a
 firstRow = Aggregator (\r -> r >>= loop)
   where
-    loop Done           = fail "first: empty sequence"
+    loop Done           = Fail.fail "first: empty sequence"
     loop (Output y r d) = d >> return y
 
 lastRow :: Aggregator a a
 lastRow = Aggregator (\r -> do mb_x <- r >>= loop
                                case mb_x of
-                                 Nothing -> fail "last: empty sequence"
+                                 Nothing -> Fail.fail "last: empty sequence"
                                  Just x  -> return x)
   where
     loop Done           = return Nothing
@@ -614,7 +621,7 @@ foldRows f x = Aggregator (\r -> r >>= loop x)
 foldRows1 :: (a -> a -> a) -> Aggregator a a
 foldRows1 f = Aggregator (\r -> r >>= first)
   where
-    first Done           = fail "foldRows1: empty sequence"
+    first Done           = Fail.fail "foldRows1: empty sequence"
     first (Output x r _) = r >>= loop x
 
     loop !x Done           = return x
