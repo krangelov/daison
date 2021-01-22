@@ -21696,9 +21696,6 @@ static int winOpen(
   if( isReadonly ){
     pFile->ctrlFlags |= WINFILE_RDONLY;
   }
-  if( sqlite3_uri_boolean(zName, "psow", SQLITE_POWERSAFE_OVERWRITE) ){
-    pFile->ctrlFlags |= WINFILE_PSOW;
-  }
   pFile->lastErrno = NO_ERROR;
   pFile->zPath = zName;
 #if SQLITE_MAX_MMAP_SIZE>0
