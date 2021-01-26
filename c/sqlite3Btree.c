@@ -20453,7 +20453,7 @@ static int winOpenSharedMemory(winFile *pDbFd){
     /* TBD need to come up with better match here.  Perhaps
     ** use FILE_ID_BOTH_DIR_INFO Structure.
     */
-    if( sqlite3StrICmp(pShmNode->zFilename, pNew->zFilename)==0 ) break;
+    if( stricmp(pShmNode->zFilename, pNew->zFilename)==0 ) break;
   }
   if( pShmNode ){
     sqlite3_free(pNew);
