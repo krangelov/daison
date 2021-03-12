@@ -1,5 +1,8 @@
 name:                daison
 version:             0.1.0.0
+license:             BSD3
+license-file:        LICENSE
+author:              Krasimir Angelov
 build-type:          Simple
 cabal-version:       >=1.10
 
