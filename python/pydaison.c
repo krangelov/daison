@@ -252,6 +252,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
         PyObject *member_name;
         while ((member_name = PyIter_Next(iterator))) {
             PyObject *member = PyObject_GetItem(members, member_name);
+            Py_DECREF(member);
             if (obj == member)
                 break;
             index++;
@@ -266,7 +267,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
             return 0;
         }
 
-        if (putVInt(0b011, 3, index, buf))
+        if (!putVInt(0b011, 3, index, buf))
             return 0;
 
         return putTag(0b00111, buf);
