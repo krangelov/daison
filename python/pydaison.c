@@ -26,11 +26,18 @@ typedef struct {
     PyObject *indices;
 } TableObject;
 
+typedef enum {
+    SIMPLE_INDEX,
+    LIST_INDEX,
+    MAYBE_INDEX
+} IndexKind;
+
 typedef struct {
     PyObject_HEAD
     PyObject *table;
     PyObject *name;
     PyObject *fun;
+    IndexKind kind;
     PyObject *type;
 } IndexObject;
 
@@ -114,6 +121,33 @@ putRest(uint64_t n, buffer *buf)
 }
 
 static int
+putTag(uint8_t tag, buffer *buf)
+{
+    return putWord8(tag, buf);
+}
+
+static int
+putFloat(buffer *buf, float f)
+{
+    if (buf->p+sizeof(float) > buf->end) {
+        size_t len     = (buf->p - buf->start);
+        size_t new_len = (len+sizeof(float)) * 2;
+        uint8_t *p = realloc(buf->start, new_len);
+        if (p == NULL) {
+            PyErr_NoMemory();
+            return 0;
+        }
+        buf->start = p;
+        buf->p     = buf->start + len;
+        buf->end   = buf->start + new_len;
+    }
+
+    *((float*) buf->p) = f;
+    buf->p += sizeof(float);
+    return 1;
+}
+
+static int
 putVInt(uint8_t tag, int bits, uint64_t n, buffer *buf)
 {
     int rbits = 7-bits;
@@ -130,14 +164,52 @@ putVInt(uint8_t tag, int bits, uint64_t n, buffer *buf)
 }
 
 static int
-serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
+serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf);
+
+static int
+serializeObject(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
 {
-    if (type == (PyObject*) &PyUnicode_Type) {
-        if (!PyUnicode_Check(obj)) {
-            PyErr_SetString(PyExc_TypeError, "The object must be a string");
+    PyObject *init = PyObject_GetAttrString(type, "__init__");
+    if (init == NULL)
+        return 0;
+    PyObject *annotations = PyObject_GetAttrString(init, "__annotations__");
+    Py_DECREF(init);
+    if (annotations == NULL)
+        return 0;
+
+    Py_ssize_t n_args = PyDict_Size(annotations)-1;
+
+    int i = 0;
+    Py_ssize_t pos = 0;
+    PyObject *field_name, *field_type;
+    while (PyDict_Next(annotations, &pos, &field_name, &field_type)) {
+        if (i >= n_args)
+            break;
+
+        PyObject *field_value = PyObject_GetAttr(obj, field_name);
+        if (field_value == NULL) {
+            Py_DECREF(annotations);
             return 0;
         }
 
+        if (!serialize(py_db,field_type,field_value,buf)) {
+            Py_DECREF(field_value);
+            Py_DECREF(annotations);
+            return 0;
+        }
+
+        Py_DECREF(field_value);
+        i++;
+    }
+
+    Py_DECREF(annotations);
+    return 1;
+}
+
+static int
+serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
+{
+    if (type == (PyObject*) &PyUnicode_Type) {
         Py_ssize_t len = PyUnicode_GetLength(obj);
 
         putVInt(0b10, 2, len, buf);
@@ -151,10 +223,171 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
 
         putBytes(utf8, size, buf);
         return 1;
-    } if (type == (PyObject*) &PyLong_Type) {
+    } else if (type == (PyObject*) &PyLong_Type) {
         return putVInt(0b01, 2, PyLong_AsLong(obj), buf);
-    } else {
+    } else if (type == (PyObject*) &PyFloat_Type) {
+        float f = PyFloat_AsDouble(obj);
+        if (PyErr_Occurred())
+            return 0;
+
+        if (!putTag(0b01111, buf))
+            return 0;
+
+        if (!putFloat(buf, f))
+            return 0;
+
+        return 1;
+    } else if (PyObject_IsInstance(type, py_db->enumMeta)) {
+        PyObject *members = PyObject_GetAttrString(type, "__members__");
+        if (members == NULL)
+            return 0;
+
+        PyObject *iterator = PyObject_GetIter(members);
+        if (iterator == NULL) {
+            Py_DECREF(members);
+            return 0;
+        }
+
+        size_t index = 0;
+        PyObject *member_name;
+        while ((member_name = PyIter_Next(iterator))) {
+            PyObject *member = PyObject_GetItem(members, member_name);
+            if (obj == member)
+                break;
+            index++;
+            Py_DECREF(member_name);
+        }
+
+        Py_DECREF(iterator);
+        Py_DECREF(members);
+
+        if (member_name == NULL) {
+            PyErr_SetString(PyExc_TypeError, "An object not a member of the Enum class");
+            return 0;
+        }
+
+        if (putVInt(0b011, 3, index, buf))
+            return 0;
+
+        return putTag(0b00111, buf);
+    } else if (PyObject_IsInstance(type, py_db->unionGenAlias)) {
+        PyObject *args = PyObject_GetAttrString(type, "__args__");
+        if (args == NULL)
+            return 0;
+        Py_ssize_t n_args = PyTuple_Size(args);
+        PyObject *obj_type = (PyObject *) Py_TYPE(obj);
+
+        if (n_args == 2 && PyTuple_GetItem(args, 1) == (PyObject *) Py_TYPE(Py_None)) {
+            if (obj == Py_None) {
+                Py_DECREF(args);
+                if (!putVInt(0b011, 3, 0, buf)) {
+                    return 0;
+                }
+            } else {
+                PyObject *arg_type = PyTuple_GetItem(args, 0);
+                if (arg_type == NULL) {
+                    Py_DECREF(args);
+                    return 0;
+                }
+                if (arg_type != obj_type) {
+                    PyErr_SetString(PyExc_TypeError, "Classes does not match");
+                    Py_DECREF(args);
+                    return 0;
+                }
+
+                Py_DECREF(args);
+
+                if (!putVInt(0b011, 3, 1, buf)) {
+                    return 0;
+                }
+                if (!serialize(py_db, obj_type, obj, buf)) {
+                    return 0;
+                }
+            }
+        } else {
+            Py_ssize_t index = -1;
+            for (Py_ssize_t i = 0; i < n_args; i++) {
+                PyObject *arg_type = PyTuple_GetItem(args, i);
+                if (arg_type == NULL) {
+                    Py_DECREF(args);
+                    return 0;
+                }
+                if (obj_type == arg_type)
+                    index = i;
+            }
+
+            Py_DECREF(args);
+
+            if (index == -1) {
+                PyErr_SetString(PyExc_TypeError, "Classes does not match");
+                return 0;
+            }
+
+            if (!putVInt(0b011, 3, index, buf)) {
+                return 0;
+            }
+
+            if (!serializeObject(py_db, obj_type, obj, buf)) {
+                return 0;
+            }
+        }
+
+        return putTag(0b00111, buf);
+    } else if (PyObject_IsInstance(type, py_db->genAlias)) {
+        PyObject *origin = PyObject_GetAttrString(type, "__origin__");
+        PyObject *args = PyObject_GetAttrString(type, "__args__");
+
+        if (origin == (PyObject*) &PyList_Type) {
+            Py_ssize_t len = PyList_Size(obj);
+            if (!putVInt(0b00, 2, len, buf))
+                return 0;
+
+            PyObject *item_type = PyTuple_GetItem(args, 0);
+            for (Py_ssize_t i = 0; i < len; i++) {
+                PyObject *item = PyList_GetItem(obj, i);
+                if (!serialize(py_db, item_type, item, buf)) {
+                    return 0;
+                }
+            }
+
+            return 1;
+        } else if (origin == (PyObject*) &PyTuple_Type) {
+            if (!putVInt(0b011, 3, 0, buf))
+                return 0;
+
+            Py_ssize_t n_args = PyTuple_Size(args);
+            for (Py_ssize_t i = 0; i < n_args; i++) {
+                PyObject *arg_type = PyTuple_GetItem(args, i);
+                if (arg_type == NULL) {
+                    return 0;
+                }
+
+                PyObject *arg = PyTuple_GetItem(obj, i);
+                if (arg == NULL) {
+                    return 0;
+                }
+
+                if (!serialize(py_db, arg_type, arg, buf))
+                    return 0;
+            }
+
+            return putTag(0b00111, buf);
+        }
+
         return 0;
+    } else {
+        if (type != (PyObject*) Py_TYPE(obj)) {
+            PyErr_SetString(PyExc_TypeError, "Classes does not match");
+            return 0;
+        }
+
+        if (!putVInt(0b011, 3, 0, buf))
+            return 0;
+
+        if (!serializeObject(py_db, type, obj, buf))
+            return 0;
+
+        return putTag(0b00111, buf);
     }
 }
 
@@ -459,7 +692,7 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
 }
 
 static PyObject *
-deserializeKeys(DBObject *py_db, buffer *buf)
+deserializeIds(buffer *buf)
 {
     PyObject *py_keys = PyList_New(0);
     if (py_keys == NULL)
@@ -497,6 +730,52 @@ deserializeKeys(DBObject *py_db, buffer *buf)
     }
 
     return py_keys;
+}
+
+static int
+insertId(i64 id, buffer *buf)
+{
+    size_t size = buf->end-buf->start;
+    uint8_t *p = realloc(buf->start, size+sizeof(id)*2);
+    if (p == NULL) {
+        PyErr_NoMemory();
+        return 0;
+    }
+    buf->start=p;
+    buf->p    =buf->start+size;
+    buf->end  =buf->start+size+sizeof(id)*2;
+    return putRest(id,buf);
+}
+
+static int
+deleteId(i64 id, buffer *buf)
+{
+    uint8_t *target = buf->p;
+
+    while (buf->p < buf->end) {
+        u64 id1  = 0;
+        int bits = 0;
+        for (;;) {
+            uint8_t w = getWord8(buf);
+            if (PyErr_Occurred()) {
+                return 0;
+            }
+
+            id1 |= (((w & 0xFE) >> 1) << bits);
+            if ((w & 1) == 0)
+                break;
+            bits += 7;
+        }
+
+        if (id == (i64) id1)
+            break;
+
+        target = buf->p;
+    }
+
+    memcpy(target, buf->p, buf->end-buf->p);
+    buf->p = buf->end-(buf->p-target);
+    return 1;
 }
 
 static int
@@ -685,11 +964,19 @@ skip_optional:
 static PyObject *
 Trans_cursor(TransObject *self, PyObject *args);
 
+static PyObject *
+Trans_store(TransObject *self, PyObject *args);
+
 static PyMethodDef Transaction_methods[] = {
     {"__enter__", (PyCFunction) Trans_enter, METH_NOARGS, ""},
     {"__exit__", (PyCFunction) Trans_exit, METH_VARARGS, ""},
     {"cursor",  (void*)Trans_cursor,  METH_VARARGS,
      "Returns an iterator over a table or an index"},
+    {"store",  (void*)Trans_store,  METH_VARARGS,
+     "t.store(tbl,id,o) stores the object o with the given id "
+     "in the table tbl under transaction t. If id is None, then "
+     "a new id is generated. In all cases the method returns the id "
+     "under which the object was stored."},
     {NULL}  /* Sentinel */
 };
 
@@ -1133,6 +1420,7 @@ Index_init(IndexObject *self, PyObject *args, PyObject *kwds)
     Py_INCREF(self->fun);
     Py_INCREF(self->type);
 
+    self->kind = SIMPLE_INDEX;
     self->name = PyUnicode_FromFormat("%U_%U", ((TableObject *) self->table)->name, name);
     if (self->name == NULL)
         return -1;
@@ -1158,6 +1446,7 @@ daison_listIndex(PyObject *self, PyObject *args, PyObject *kwds)
     Py_INCREF(py_index->fun);
     Py_INCREF(py_index->type);
 
+    py_index->kind = LIST_INDEX;
     py_index->name = PyUnicode_FromFormat("%U_%U", ((TableObject *) py_index->table)->name, name);
     if (py_index->name == NULL) {
         Py_DECREF(py_index);
@@ -1185,6 +1474,7 @@ daison_maybeIndex(PyObject *self, PyObject *args, PyObject *kwds)
     Py_INCREF(py_index->fun);
     Py_INCREF(py_index->type);
 
+    py_index->kind = MAYBE_INDEX;
     py_index->name = PyUnicode_FromFormat("%U_%U", ((TableObject *) py_index->table)->name, name);
     if (py_index->name == NULL) {
         Py_DECREF(py_index);
@@ -1246,8 +1536,10 @@ Index_cursor_everything(DBObject *db, IndexObject *index)
             list = NULL;
         }
 
+        uint8_t payload[payloadSize];
+
         buffer buf;
-        buf.start = alloca(payloadSize);
+        buf.start = payload;
         buf.p     = buf.start;
         buf.end   = buf.start+payloadSize;
 
@@ -1264,7 +1556,7 @@ Index_cursor_everything(DBObject *db, IndexObject *index)
             break;
         }
 
-        PyObject *keys  = deserializeKeys(db, &buf);
+        PyObject *keys  = deserializeIds(&buf);
         if (keys == NULL) {
             Py_DECREF(value);
             Py_DECREF(list);
@@ -1451,7 +1743,7 @@ Index_cursor_at(DBObject *db, IndexObject *index, PyObject *key)
         return NULL;
     }
 
-    PyObject *keys = deserializeKeys(db, &buf);
+    PyObject *keys = deserializeIds(&buf);
 
     sqlite3BtreeCloseCursor(pCursor);
 
@@ -1489,6 +1781,301 @@ Trans_cursor(TransObject *self, PyObject *args)
         PyErr_SetString(PyExc_TypeError, "function takes 1 or 2 arguments");
         return NULL;
     }
+}
+
+static int
+updateIndicesHelper(DBObject *db, int tnum, buffer *buf, i64 id,
+                    int (*update)(i64 id, buffer *buf))
+{
+    int rc;
+
+    BtCursor *pCursor = NULL;
+    rc = sqlite3BtreeCursor(db->pBtree, tnum, 0, 1, 1, &pCursor);
+    if (!checkSqlite3Error(rc)) {
+        free(buf->start);
+        return 0;
+    }
+
+    int res;
+    i64 indexSize = buf->p - buf->start;
+    rc = sqlite3BtreeMoveTo(pCursor, buf->start, indexSize, 0, &res);
+    free(buf->start);
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pCursor);
+        return 0;
+    }
+
+    if (res == 0) {
+        i64 payloadSize;
+        rc = sqlite3BtreeKeySize(pCursor, &payloadSize);
+        if (!checkSqlite3Error(rc)) {
+            sqlite3BtreeCloseCursor(pCursor);
+            return 0;
+        }
+
+        buf->start = malloc(payloadSize);
+        buf->p     = buf->start+indexSize;
+        buf->end   = buf->start+payloadSize;
+
+        if (buf->start == NULL) {
+            PyErr_NoMemory();
+            return 0;
+        }
+
+        rc = sqlite3BtreeKey(pCursor, 0, payloadSize, buf->start);
+        if (!checkSqlite3Error(rc)) {
+            free(buf->start);
+            sqlite3BtreeCloseCursor(pCursor);
+            return 0;
+        }
+
+        if (!update(id, buf)) {
+            free(buf->start);
+            sqlite3BtreeCloseCursor(pCursor);
+            return 0;
+        }
+
+        if (buf->p==buf->start+indexSize) {
+            rc = sqlite3BtreeDelete(pCursor, 0);
+        } else {
+            rc = sqlite3BtreeInsert(pCursor, buf->start, buf->p-buf->start, NULL, 0, 0, 0, 0);
+        }
+
+        free(buf->start);
+
+        if (!checkSqlite3Error(rc)) {
+            sqlite3BtreeCloseCursor(pCursor);
+            return 0;
+        }
+    }
+
+    sqlite3BtreeCloseCursor(pCursor);
+    return 1;
+}
+
+static int
+updateIndices(DBObject *db,
+              TableObject *table, i64 id, PyObject *obj,
+              int (*update)(i64 id, buffer *buf))
+{
+    int rc;
+
+    PyObject *args = PyTuple_New(1);
+    if (args == NULL) {
+        Py_DECREF(obj);
+        return 0;
+    }
+    Py_INCREF(obj);
+    PyTuple_SET_ITEM(args, 0, obj);
+
+    Py_ssize_t n_indices = PyList_GET_SIZE(table->indices);
+    for (Py_ssize_t i = 0; i < n_indices; i++) {
+        IndexObject *index = (IndexObject*) PyList_GET_ITEM(table->indices, i);
+
+        PyObject *py_info = PyDict_GetItem(db->schema, index->name);
+        if (PyErr_Occurred()) {
+            Py_DECREF(args);
+            return 0;
+        }
+
+        if (py_info == NULL) {
+            PyErr_Format(DBError, "Index %U does not exist", index->name);
+            Py_DECREF(args);
+            return 0;
+        }
+
+        int tnum = PyLong_AsLong(PyTuple_GET_ITEM(py_info, 1));
+        rc = sqlite3BtreeLockTable(db->pBtree, tnum, 1);
+        if (!checkSqlite3Error(rc)) {
+            Py_DECREF(args);
+            return 0;
+        }
+
+        PyObject *key = PyObject_CallObject(index->fun, args);
+        if (key == NULL) {
+            Py_DECREF(args);
+            return 0;
+        }
+
+        if (index->kind == LIST_INDEX) {
+            PyObject *iterator = PyObject_GetIter(key);
+            if (iterator == NULL) {
+                Py_DECREF(key);
+                Py_DECREF(args);
+                return 0;
+            }
+
+            PyObject *item;
+            while ((item = PyIter_Next(iterator))) {
+                buffer buf = { NULL, NULL, NULL };
+                if (!serialize(db, index->type, item, &buf)) {
+                    free(buf.start);
+                    Py_DECREF(item);
+                    Py_DECREF(iterator);
+                    Py_DECREF(key);
+                    Py_DECREF(args);
+                    return 0;
+                }
+
+                Py_DECREF(item);
+
+                if (!updateIndicesHelper(db, tnum, &buf, id, update)) {
+                    Py_DECREF(iterator);
+                    Py_DECREF(key);
+                    Py_DECREF(args);
+                    return 0;
+                }
+            }
+
+            Py_DECREF(iterator);
+            Py_DECREF(key);
+        } else {
+            if (index->kind == MAYBE_INDEX && key==Py_None) {
+                Py_DECREF(key);
+                continue;
+            }
+
+            buffer buf = { NULL, NULL, NULL };
+            if (!serialize(db, index->type, key, &buf)) {
+                free(buf.start);
+                Py_DECREF(key);
+                Py_DECREF(args);
+                return 0;
+            }
+
+            Py_DECREF(key);
+
+            if (!updateIndicesHelper(db, tnum, &buf, id, update)) {
+                Py_DECREF(args);
+                return 0;
+            }
+        }
+    }
+
+    Py_DECREF(args);
+    return 1;
+}
+
+static PyObject *
+Trans_store(TransObject *self, PyObject *args)
+{
+    TableObject *table;
+    PyObject *py_id, *obj;
+    if (!PyArg_ParseTuple(args, "O!OO", &daison_TableType, (PyObject**)&table,
+                                        &py_id, &obj))
+        return NULL;
+
+    int rc;
+
+    PyObject *py_info = PyDict_GetItem(self->db->schema, table->name);
+    if (PyErr_Occurred())
+        return NULL;
+
+    if (py_info == NULL) {
+        PyErr_Format(DBError, "Table %U does not exist", table->name);
+        return NULL;
+    }
+
+    int tnum = PyLong_AsLong(PyTuple_GET_ITEM(py_info, 1));
+
+    rc = sqlite3BtreeLockTable(self->db->pBtree, tnum, 1);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    BtCursor *pCursor = NULL;
+    rc = sqlite3BtreeCursor(self->db->pBtree, tnum, 1, 0, 0, &pCursor);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    i64 id;
+    int res;
+    if (py_id == Py_None) {
+        rc = sqlite3BtreeLast(pCursor, &res);
+        if (!checkSqlite3Error(rc)) {
+            return NULL;
+        }
+
+        if (res != 0)
+            id = 1;
+        else {
+            rc = sqlite3BtreeKeySize(pCursor, &id);
+            if (!checkSqlite3Error(rc)) {
+                return NULL;
+            }
+
+            id++;
+        }
+        py_id = PyLong_FromLong(id);
+    } else {
+        id = PyLong_AsLong(py_id);
+        if (PyErr_Occurred()) {
+            sqlite3BtreeCloseCursor(pCursor);
+            return NULL;
+        }
+
+        rc = sqlite3BtreeMoveTo(pCursor, NULL, id, 0, &res);
+        if (!checkSqlite3Error(rc)) {
+            return NULL;
+        }
+
+        if (res == 0) {
+            u32 payloadSize;
+            rc = sqlite3BtreeDataSize(pCursor, &payloadSize);
+            if (!checkSqlite3Error(rc)) {
+                return NULL;
+            }
+
+            uint8_t payload[payloadSize];
+            buffer buf;
+            buf.start = payload;
+            buf.p     = buf.start;
+            buf.end   = buf.start+payloadSize;
+
+            rc = sqlite3BtreeData(pCursor, 0, payloadSize, payload);
+            if (!checkSqlite3Error(rc)) {
+                return 0;
+            }
+
+            PyObject *obj = deserialize(self->db, table->type, &buf);
+            if (obj == NULL) {
+                return 0;
+            }
+
+            if (!updateIndices(self->db, table, id, obj, deleteId)) {
+                Py_DECREF(obj);
+                return NULL;
+            }
+            Py_DECREF(obj);
+        }
+
+        Py_INCREF(py_id);
+    }
+
+    buffer buf = { NULL, NULL, NULL };
+    if (!serialize(self->db, table->type, obj, &buf)) {
+        free(buf.start);
+        Py_DECREF(py_id);
+        sqlite3BtreeCloseCursor(pCursor);
+        return NULL;
+    }
+
+    rc = sqlite3BtreeInsert(pCursor, NULL, id, buf.start, buf.p-buf.start, 0, 0, 0);
+    free(buf.start);
+    sqlite3BtreeCloseCursor(pCursor);
+
+    if (!checkSqlite3Error(rc)) {
+        Py_DECREF(py_id);
+        return NULL;
+    }
+
+    if (!updateIndices(self->db, table, id, obj, insertId)) {
+        Py_DECREF(py_id);
+        return NULL;
+    }
+
+    return py_id;
 }
 
 static PyMethodDef module_methods[] = {
