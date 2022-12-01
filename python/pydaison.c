@@ -1597,6 +1597,10 @@ Table_cursor_at(DBObject *db, TableObject *table, PyObject *py_key)
 {
     int rc;
 
+    i64 key = PyLong_AsLong(py_key);
+    if (PyErr_Occurred())
+        return NULL;
+
     PyObject *py_info = PyDict_GetItem(db->schema, table->name);
     if (PyErr_Occurred())
         return NULL;
@@ -1621,8 +1625,6 @@ Table_cursor_at(DBObject *db, TableObject *table, PyObject *py_key)
     if (!checkSqlite3Error(rc)) {
         return NULL;
     }
-
-    i64 key = PyLong_AsLong(py_key);
 
     int res;
     rc = sqlite3BtreeMoveTo(pCursor, NULL, key, 0, &res);
