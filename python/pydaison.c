@@ -105,13 +105,13 @@ putBytes(const char *bytes, size_t n_bytes, buffer *buf)
 }
 
 static int
-putRest(uint64_t n, buffer *buf)
+putRest(int64_t n, buffer *buf)
 {
     for (;;) {
         uint8_t n0 = (n & 0x7F) << 1;
         n = n >> 7;
 
-        if (n == 0) {
+        if ((n == 0 && (n0 & 0x80) == 0) || (n == -1 && (n0 & 0x80) != 0)) {
             return putWord8(n0,buf);
         } else {
             if (!putWord8(n0 | 1,buf))
@@ -148,13 +148,13 @@ putFloat(buffer *buf, float f)
 }
 
 static int
-putVInt(uint8_t tag, int bits, uint64_t n, buffer *buf)
+putVInt(uint8_t tag, int bits, int64_t n, buffer *buf)
 {
     int rbits = 7-bits;
-    uint64_t n0 = (n & ((1 << rbits) - 1)) << (bits+1);
+    int64_t n0 = (n & ((1 << rbits) - 1)) << (bits+1);
     n = n >> rbits;
 
-    if (n == 0) {
+    if ((n == 0 && (n0 & 0x80) == 0) || (n == -1 && (n0 & 0x80) != 0)) {
         return putWord8(n0 | tag, buf);
     } else {
         if (!putWord8(n0 | (1 << bits) | tag, buf))
@@ -248,7 +248,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
             return 0;
         }
 
-        size_t index = 0;
+        size_t index = 1;
         PyObject *member_name;
         while ((member_name = PyIter_Next(iterator))) {
             PyObject *member = PyObject_GetItem(members, member_name);
@@ -281,7 +281,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
         if (n_args == 2 && PyTuple_GetItem(args, 1) == (PyObject *) Py_TYPE(Py_None)) {
             if (obj == Py_None) {
                 Py_DECREF(args);
-                if (!putVInt(0b011, 3, 0, buf)) {
+                if (!putVInt(0b011, 3, 1, buf)) {
                     return 0;
                 }
             } else {
@@ -298,7 +298,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
 
                 Py_DECREF(args);
 
-                if (!putVInt(0b011, 3, 1, buf)) {
+                if (!putVInt(0b011, 3, 2, buf)) {
                     return 0;
                 }
                 if (!serialize(py_db, obj_type, obj, buf)) {
@@ -306,7 +306,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
                 }
             }
         } else {
-            Py_ssize_t index = -1;
+            Py_ssize_t index = 0;
             for (Py_ssize_t i = 0; i < n_args; i++) {
                 PyObject *arg_type = PyTuple_GetItem(args, i);
                 if (arg_type == NULL) {
@@ -314,12 +314,12 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
                     return 0;
                 }
                 if (obj_type == arg_type)
-                    index = i;
+                    index = i+1;
             }
 
             Py_DECREF(args);
 
-            if (index == -1) {
+            if (index == 0) {
                 PyErr_SetString(PyExc_TypeError, "Classes does not match");
                 return 0;
             }
@@ -353,7 +353,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
 
             return 1;
         } else if (origin == (PyObject*) &PyTuple_Type) {
-            if (!putVInt(0b011, 3, 0, buf))
+            if (!putVInt(0b011, 3, 1, buf))
                 return 0;
 
             Py_ssize_t n_args = PyTuple_Size(args);
@@ -382,7 +382,7 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
             return 0;
         }
 
-        if (!putVInt(0b011, 3, 0, buf))
+        if (!putVInt(0b011, 3, 1, buf))
             return 0;
 
         if (!serializeObject(py_db, type, obj, buf))
@@ -403,7 +403,7 @@ getWord8(buffer *buf)
     return *buf->p++;
 }
 
-static uint64_t
+static int64_t
 getVInt(uint8_t tag, int bits, const char *name, buffer *buf)
 {
     uint8_t w = getWord8(buf);
@@ -411,7 +411,7 @@ getVInt(uint8_t tag, int bits, const char *name, buffer *buf)
         return 0;
 
     if ((w & ((1 << bits) - 1)) == tag) {
-        uint64_t n = w >> (bits+1);
+        int64_t n = w >> (bits+1);
         if ((w & (1 << bits)) == 0) {
             if ((w & 0x80) != 0)
                 return (n | (0xFF << (7-bits)));
@@ -573,7 +573,6 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
                 break;
             }
             index--;
-
             Py_DECREF(member_name);
         }
 
@@ -592,7 +591,7 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
         Py_ssize_t n_args = PyTuple_Size(args);
 
         if (n_args == 2 && PyTuple_GetItem(args, 1) == (PyObject *) Py_TYPE(Py_None)) {
-            if (index == 0) {
+            if (index == 1) {
                 res = Py_None;
                 Py_INCREF(res);
             } else {
@@ -604,7 +603,7 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
                 res = deserialize(py_db, arg_type, buf);
             }
         } else {
-            PyObject *arg_type = PyTuple_GetItem(args, index);
+            PyObject *arg_type = PyTuple_GetItem(args, index-1);
             if (arg_type == NULL) {
                 Py_DECREF(args);
                 return NULL;
@@ -1793,7 +1792,7 @@ updateIndicesHelper(DBObject *db, int tnum, buffer *buf, i64 id,
     int rc;
 
     BtCursor *pCursor = NULL;
-    rc = sqlite3BtreeCursor(db->pBtree, tnum, 0, 1, 1, &pCursor);
+    rc = sqlite3BtreeCursor(db->pBtree, tnum, 1, 1, 1, &pCursor);
     if (!checkSqlite3Error(rc)) {
         free(buf->start);
         return 0;
@@ -1802,13 +1801,15 @@ updateIndicesHelper(DBObject *db, int tnum, buffer *buf, i64 id,
     int res;
     i64 indexSize = buf->p - buf->start;
     rc = sqlite3BtreeMoveTo(pCursor, buf->start, indexSize, 0, &res);
-    free(buf->start);
     if (!checkSqlite3Error(rc)) {
+        free(buf->start);
         sqlite3BtreeCloseCursor(pCursor);
         return 0;
     }
 
     if (res == 0) {
+        free(buf->start);
+
         i64 payloadSize;
         rc = sqlite3BtreeKeySize(pCursor, &payloadSize);
         if (!checkSqlite3Error(rc)) {
@@ -1821,6 +1822,7 @@ updateIndicesHelper(DBObject *db, int tnum, buffer *buf, i64 id,
         buf->end   = buf->start+payloadSize;
 
         if (buf->start == NULL) {
+            sqlite3BtreeCloseCursor(pCursor);
             PyErr_NoMemory();
             return 0;
         }
@@ -1831,25 +1833,28 @@ updateIndicesHelper(DBObject *db, int tnum, buffer *buf, i64 id,
             sqlite3BtreeCloseCursor(pCursor);
             return 0;
         }
+    }
 
-        if (!update(id, buf)) {
-            free(buf->start);
-            sqlite3BtreeCloseCursor(pCursor);
-            return 0;
-        }
-
-        if (buf->p==buf->start+indexSize) {
-            rc = sqlite3BtreeDelete(pCursor, 0);
-        } else {
-            rc = sqlite3BtreeInsert(pCursor, buf->start, buf->p-buf->start, NULL, 0, 0, 0, 0);
-        }
-
+    if (!update(id, buf)) {
         free(buf->start);
+        sqlite3BtreeCloseCursor(pCursor);
+        return 0;
+    }
 
-        if (!checkSqlite3Error(rc)) {
-            sqlite3BtreeCloseCursor(pCursor);
-            return 0;
-        }
+    if (buf->p==buf->start+indexSize) {
+        if (res == 0)
+            rc = sqlite3BtreeDelete(pCursor, 0);
+        else
+            rc = SQLITE_OK;
+    } else {
+        rc = sqlite3BtreeInsert(pCursor, buf->start, buf->p-buf->start, NULL, 0, 0, 0, 0);
+    }
+
+    free(buf->start);
+
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pCursor);
+        return 0;
     }
 
     sqlite3BtreeCloseCursor(pCursor);
