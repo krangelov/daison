@@ -404,6 +404,26 @@ getWord8(buffer *buf)
 }
 
 static int64_t
+getRest(int bits, int64_t n, buffer *buf)
+{
+    uint8_t w;
+    for (;;) {
+        w = getWord8(buf);
+        if (PyErr_Occurred())
+            return 0;
+
+        n |= (((w & 0xFE) >> 1) << bits);
+        if ((w & 1) == 0)
+            break;
+        bits += 7;
+    }
+    if ((w & 0x80) != 0) {
+        n |= ((-128) << bits);
+    }
+    return n;
+}
+
+static int64_t
 getVInt(uint8_t tag, int bits, const char *name, buffer *buf)
 {
     uint8_t w = getWord8(buf);
@@ -415,23 +435,10 @@ getVInt(uint8_t tag, int bits, const char *name, buffer *buf)
         if ((w & (1 << bits)) == 0) {
             if ((w & 0x80) != 0)
                 return (n | (0xFF << (7-bits)));
+            return n;
         } else {
-            bits = 7-bits;
-            for (;;) {
-                w = getWord8(buf);
-                if (PyErr_Occurred())
-                    return 0;
-
-                n |= ((w & 0xFE) << (bits-1));
-                if ((w & 1) == 0)
-                    break;
-                bits += 7;
-            }
-            if ((w & 0x80) != 0) {
-                n |= ((-128) << bits);
-            }
+            return getRest(7-bits, n, buf);
         }
-        return n;
     } else {
         PyErr_Format(DBError, "failed to find %s", name);
         return 0;
@@ -699,19 +706,10 @@ deserializeIds(buffer *buf)
         return NULL;
 
     while (buf->p < buf->end) {
-        int key  = 0;
-        int bits = 0;
-        for (;;) {
-            uint8_t w = getWord8(buf);
-            if (PyErr_Occurred()) {
-                Py_DECREF(py_keys);
-                return NULL;
-            }
-
-            key |= (((w & 0xFE) >> 1) << bits);
-            if ((w & 1) == 0)
-                break;
-            bits += 7;
+        int64_t key = getRest(0, 0, buf);
+        if (PyErr_Occurred()) {
+            Py_DECREF(py_keys);
+            return NULL;
         }
         
         PyObject *py_key = PyLong_FromLong(key);
@@ -735,15 +733,18 @@ deserializeIds(buffer *buf)
 static int
 insertId(i64 id, buffer *buf)
 {
-    size_t size = buf->end-buf->start;
-    uint8_t *p = realloc(buf->start, size+sizeof(id)*2);
-    if (p == NULL) {
-        PyErr_NoMemory();
-        return 0;
+    size_t required = sizeof(id)*2;
+    if (buf->p + required > buf->end) {
+        size_t size = buf->p-buf->start;
+        uint8_t *p = realloc(buf->start, size+required);
+        if (p == NULL) {
+            PyErr_NoMemory();
+            return 0;
+        }
+        buf->start=p;
+        buf->p    =buf->start+size;
+        buf->end  =buf->start+size+required;
     }
-    buf->start=p;
-    buf->p    =buf->start+size;
-    buf->end  =buf->start+size+sizeof(id)*2;
     return putRest(id,buf);
 }
 
@@ -753,18 +754,9 @@ deleteId(i64 id, buffer *buf)
     uint8_t *target = buf->p;
 
     while (buf->p < buf->end) {
-        u64 id1  = 0;
-        int bits = 0;
-        for (;;) {
-            uint8_t w = getWord8(buf);
-            if (PyErr_Occurred()) {
-                return 0;
-            }
-
-            id1 |= (((w & 0xFE) >> 1) << bits);
-            if ((w & 1) == 0)
-                break;
-            bits += 7;
+        u64 id1  = getRest(0, 0, buf);
+        if (PyErr_Occurred()) {
+            return 0;
         }
 
         if (id == (i64) id1)
