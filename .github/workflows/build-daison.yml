@@ -1,0 +1,25 @@
+name: Build Daison
+
+on: push
+
+jobs:
+  build:
+    name: Build wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-18.04, macos-10.15, windows]
+
+    - name: Install cibuildwheel
+      run: |
+        python3 -m pip install git+https://github.com/joerick/cibuildwheel.git@main
+
+    - name: Compile the package
+      run: |
+        python3 -m cibuildwheel . --output-dir wheelhouse
+
+    - uses: actions/upload-artifact@master
+      with:
+        name: python-linux
+        path: ./wheelhouse
