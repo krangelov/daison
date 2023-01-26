@@ -3,6 +3,11 @@
 #include <structmember.h>
 #include "../c/sqlite3Btree.h"
 
+#ifdef _MSC_VER
+#include <malloc.h>
+#define alloca _alloca
+#endif
+
 typedef struct {
     PyObject_HEAD
     Btree *pBtree;
@@ -1528,10 +1533,8 @@ Index_cursor_everything(DBObject *db, IndexObject *index)
             list = NULL;
         }
 
-        uint8_t payload[payloadSize];
-
         buffer buf;
-        buf.start = payload;
+        buf.start = (uint8_t*) alloca(payloadSize);
         buf.p     = buf.start;
         buf.end   = buf.start+payloadSize;
 
@@ -2027,13 +2030,12 @@ Trans_store(TransObject *self, PyObject *args)
                 return NULL;
             }
 
-            uint8_t payload[payloadSize];
             buffer buf;
-            buf.start = payload;
+            buf.start = (uint8_t*) alloca(payloadSize);
             buf.p     = buf.start;
             buf.end   = buf.start+payloadSize;
 
-            rc = sqlite3BtreeData(pCursor, 0, payloadSize, payload);
+            rc = sqlite3BtreeData(pCursor, 0, payloadSize, buf.start);
             if (!checkSqlite3Error(rc)) {
                 return 0;
             }
