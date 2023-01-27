@@ -30,7 +30,9 @@ jobs:
       run: |
         python3 -m cibuildwheel . --output-dir wheelhouse
 
-    - uses: actions/upload-artifact@master
-      with:
-        name: daison-${{ matrix.os }}
-        path: ./wheelhouse
+    - name: Publish
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.pypi_password }}
+        run: |
+          (curl -I --fail https://pypi.org/project/$(python setup.py --name)/$(python setup.py --version)/) || twine upload wheelhouse/*
