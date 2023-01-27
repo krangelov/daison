@@ -31,7 +31,7 @@ jobs:
         python3 -m cibuildwheel . --output-dir wheelhouse
 
     - name: Publish
-      env: |
+      env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.pypi_password }}
       run: |
