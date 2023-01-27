@@ -33,9 +33,22 @@ jobs:
       run: |
         python3 -m cibuildwheel . --output-dir wheelhouse
 
+    - name: Upload artifact
+      uses: actions/upload-artifact@master
+      with:
+        name: daison-${{ matrix.os }}
+        path: ./wheelhouse
+
+  upload_pypi:
+    name: Upload to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    steps:
     - name: Publish
       env:
-        TWINE_USERNAME: __token__
+        TWINE_USERNAME: krasimir
         TWINE_PASSWORD: ${{ secrets.pypi_password }}
       run: |
         (curl -I --fail https://pypi.org/project/$(python setup.py --name)/$(python setup.py --version)/) || twine upload wheelhouse/*
