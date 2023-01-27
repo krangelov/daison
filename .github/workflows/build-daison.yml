@@ -41,14 +41,29 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPI
-    needs: [daison-ubuntu, daison-macos, daison-windows]
+    needs: [build_wheels]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:
+    - uses: actions/download-artifact@master
+      with:
+        name: daison-linux
+        path: ./dist
+
+    - uses: actions/download-artifact@master
+      with:
+        name: daison-macos
+        path: ./dist
+
+    - uses: actions/download-artifact@master
+      with:
+        name: daison-windows
+        path: ./dist
+
     - name: Publish
       env:
         TWINE_USERNAME: krasimir
         TWINE_PASSWORD: ${{ secrets.pypi_password }}
       run: |
-        (curl -I --fail https://pypi.org/project/$(python setup.py --name)/$(python setup.py --version)/) || twine upload wheelhouse/*
+        (curl -I --fail https://pypi.org/project/$(python setup.py --name)/$(python setup.py --version)/) || twine upload dist/*
