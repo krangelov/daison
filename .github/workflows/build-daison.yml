@@ -41,7 +41,7 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPI
-    needs: [daison-ubuntu-latest, daison-macos-10.15, daison-windows-latest]
+    needs: [daison-ubuntu, daison-macos, daison-windows]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
