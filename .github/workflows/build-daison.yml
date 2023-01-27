@@ -65,7 +65,7 @@ jobs:
 
     - name: Publish
       env:
-        TWINE_USERNAME: krasimir
+        TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.pypi_password }}
       run: |
         (curl -I --fail https://pypi.org/project/$(python setup.py --name)/$(python setup.py --version)/) || twine upload dist/*
