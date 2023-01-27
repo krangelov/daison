@@ -26,6 +26,9 @@ jobs:
       run: |
         python3 -m pip install git+https://github.com/joerick/cibuildwheel.git@main
 
+    - name: Install twine
+      run: pip install twine
+
     - name: Compile the package
       run: |
         python3 -m cibuildwheel . --output-dir wheelhouse
