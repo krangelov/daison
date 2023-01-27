@@ -48,17 +48,17 @@ jobs:
     steps:
     - uses: actions/download-artifact@master
       with:
-        name: daison-linux
+        name: daison-ubuntu-latest
         path: ./dist
 
     - uses: actions/download-artifact@master
       with:
-        name: daison-macos
+        name: daison-macos-10.15
         path: ./dist
 
     - uses: actions/download-artifact@master
       with:
-        name: daison-windows
+        name: daison-windows-latest
         path: ./dist
 
     - name: Publish
