@@ -482,8 +482,17 @@ static PyObject *
 deserialize(DBObject *py_db, PyObject *type, buffer *buf);
 
 static PyObject *
-deserializeObject(DBObject *py_db, PyObject *type, buffer *buf)
+deserializeObject(DBObject *py_db, uint64_t index, PyObject *type, buffer *buf)
 {
+    if (PyObject_HasAttrString(type, "__deserialize__")) {
+        PyObject *py_capsule = PyCapsule_New(buf, "daison-buffer", NULL);
+        if (py_capsule == NULL)
+            return NULL;
+        PyObject *res = PyObject_CallMethod(type, "__deserialize__", "OlO", py_db, index, py_capsule);
+        Py_DECREF(py_capsule);
+        return res;
+    }
+
     PyObject *init = PyObject_GetAttrString(type, "__init__");
     if (init == NULL)
         return NULL;
@@ -620,7 +629,7 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
                 Py_DECREF(args);
                 return NULL;
             }
-            res = deserializeObject(py_db, arg_type, buf);
+            res = deserializeObject(py_db, index, arg_type, buf);
         }
 
         Py_DECREF(args);
@@ -685,11 +694,11 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
         Py_DECREF(args);
         Py_DECREF(origin);
     } else {
-        getVInt(0b011, 3, "a constructor", buf);
+        uint64_t index = getVInt(0b011, 3, "a constructor", buf);
         if (PyErr_Occurred())
             return NULL;
 
-        res = deserializeObject(py_db, type, buf);
+        res = deserializeObject(py_db, index, type, buf);
         if (res == NULL)
             return NULL;
 
@@ -1054,7 +1063,7 @@ DB_run(DBObject *self, PyObject *args)
 }
 
 static PyObject *
-DB_close(DBObject *self, PyObject *args)
+DB_close(DBObject *self, PyObject *Py_UNUSED(ignored))
 {
     if (self->pBtree != NULL) {
         int rc = sqlite3BtreeClose(self->pBtree);
@@ -1077,6 +1086,20 @@ DB_dealloc(DBObject *self)
     Py_TYPE(self)->tp_free(self);
 }
 
+static PyObject *
+DB_deserialize(DBObject *self, PyObject *args)
+{
+    PyObject *py_type, *py_capsule;
+    if (!PyArg_ParseTuple(args, "O!O", &PyType_Type, &py_type, &py_capsule))
+        return NULL;
+
+    buffer *buf = PyCapsule_GetPointer(py_capsule, "daison-buffer");
+    if (buf == NULL)
+        return NULL;
+
+    return deserialize(self, py_type, buf);
+}
+
 static DBObject *
 DB_enter(DBObject *self, PyObject *Py_UNUSED(ignored))
 {
@@ -1087,8 +1110,9 @@ DB_enter(DBObject *self, PyObject *Py_UNUSED(ignored))
 static PyMethodDef DB_methods[] = {
     {"run",  (void*)DB_run,  METH_VARARGS,
      "Runs a transaction over the database"},
-    {"close",  (void*)DB_close,  METH_VARARGS,
+    {"close",  (void*)DB_close,  METH_NOARGS,
      "Closes a Daison database"},
+    {"__deserialize__", (PyCFunction) DB_deserialize, METH_VARARGS, ""},
     {"__enter__", (PyCFunction) DB_enter, METH_NOARGS, ""},
     {"__exit__", (PyCFunction) DB_close, METH_VARARGS, ""},
     {NULL}  /* Sentinel */
