@@ -962,6 +962,9 @@ static PyObject *
 Trans_cursor(TransObject *self, PyObject *args);
 
 static PyObject *
+Trans_indexCursor(TransObject *self, PyObject *args);
+
+static PyObject *
 Trans_store(TransObject *self, PyObject *args);
 
 static PyMethodDef Transaction_methods[] = {
@@ -969,6 +972,8 @@ static PyMethodDef Transaction_methods[] = {
     {"__exit__", (PyCFunction) Trans_exit, METH_VARARGS, ""},
     {"cursor",  (void*)Trans_cursor,  METH_VARARGS,
      "Returns an iterator over a table or an index"},
+    {"indexCursor",  (void*)Trans_indexCursor,  METH_VARARGS,
+     "Returns an iterator over an index and returns a tuple of id and table value"},
     {"store",  (void*)Trans_store,  METH_VARARGS,
      "t.store(tbl,id,o) stores the object o with the given id "
      "in the table tbl under transaction t. If id is None, then "
@@ -1748,6 +1753,192 @@ Index_cursor_at(DBObject *db, IndexObject *index, PyObject *key)
 }
 
 static PyObject *
+TableIndex_cursor_at(DBObject *db, IndexObject *index, PyObject *key)
+{
+    int rc;
+
+    PyObject *py_index_info = PyDict_GetItem(db->schema, index->name);
+    if (PyErr_Occurred())
+        return NULL;
+
+    if (py_index_info == NULL) {
+        PyErr_Format(DBError, "Index %U does not exist", index->name);
+        return NULL;
+    }
+
+    PyObject *py_index_tnum = PyTuple_GetItem(py_index_info, 1);
+    if (py_index_tnum == NULL)
+        return NULL;
+    int index_tnum = PyLong_AsLong(py_index_tnum);
+
+    rc = sqlite3BtreeLockTable(db->pBtree, index_tnum, 0);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    TableObject *py_table = (TableObject *)index->table;
+    PyObject *py_table_info = PyDict_GetItem(db->schema, py_table->name);
+    if (PyErr_Occurred())
+        return NULL;
+
+    if (py_table_info == NULL) {
+        PyErr_Format(DBError, "Table %U does not exist", py_table->name);
+        return NULL;
+    }
+
+    PyObject *py_table_tnum = PyTuple_GetItem(py_table_info, 1);
+    if (py_table_info == NULL)
+        return NULL;
+    int table_tnum = PyLong_AsLong(py_table_tnum);
+
+    rc = sqlite3BtreeLockTable(db->pBtree, table_tnum, 0);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+
+    BtCursor *pIndexCursor = NULL;
+    rc = sqlite3BtreeCursor(db->pBtree, index_tnum, 0, 1, 1, &pIndexCursor);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    BtCursor *pTableCursor = NULL;
+    rc = sqlite3BtreeCursor(db->pBtree, table_tnum, 0, 0, 0, &pTableCursor);
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        return NULL;
+    }
+
+    buffer buf = { NULL, NULL, NULL };
+    if (!serialize(db, index->type, key, &buf)) {
+        free(buf.start);
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        sqlite3BtreeCloseCursor(pTableCursor);
+        return NULL;
+    }
+
+    int res;
+    i64 indexSize = buf.p - buf.start;
+    rc = sqlite3BtreeMoveTo(pIndexCursor, buf.start, indexSize, 0, &res);
+    free(buf.start);
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        sqlite3BtreeCloseCursor(pTableCursor);
+        return NULL;
+    }
+
+    if (res != 0) {
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        sqlite3BtreeCloseCursor(pTableCursor);
+        return PyList_New(0);
+    }
+
+    i64 payloadSize;
+    rc = sqlite3BtreeKeySize(pIndexCursor, &payloadSize);
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        sqlite3BtreeCloseCursor(pTableCursor);
+        return NULL;
+    }
+
+    i64 size = payloadSize-indexSize;
+    buf.start = alloca(size);
+    buf.p     = buf.start;
+    buf.end   = buf.start+size;
+
+    rc = sqlite3BtreeKey(pIndexCursor, indexSize, size, buf.start);
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        sqlite3BtreeCloseCursor(pTableCursor);
+        return NULL;
+    }
+
+    PyObject *py_values = PyList_New(0);
+    if (py_values == NULL) {
+        sqlite3BtreeCloseCursor(pIndexCursor);
+        sqlite3BtreeCloseCursor(pTableCursor);
+        return NULL;
+    }
+
+    while (buf.p < buf.end) {
+        int64_t key = getRest(0, 0, &buf);
+        if (PyErr_Occurred()) {
+            sqlite3BtreeCloseCursor(pIndexCursor);
+            sqlite3BtreeCloseCursor(pTableCursor);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+
+        rc = sqlite3BtreeMoveTo(pTableCursor, NULL, key, 0, &res);
+        if (!checkSqlite3Error(rc) || res != 0) {
+            sqlite3BtreeCloseCursor(pIndexCursor);
+            sqlite3BtreeCloseCursor(pTableCursor);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+
+        u32 payloadSize;
+        rc = sqlite3BtreeDataSize(pTableCursor, &payloadSize);
+        if (!checkSqlite3Error(rc)) {
+            sqlite3BtreeCloseCursor(pIndexCursor);
+            sqlite3BtreeCloseCursor(pTableCursor);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+
+        buffer tbuf;
+        tbuf.start = malloc(payloadSize);
+        tbuf.p     = tbuf.start;
+        tbuf.end   = tbuf.start+payloadSize;
+
+        rc = sqlite3BtreeData(pTableCursor, 0, payloadSize, tbuf.start);
+        if (!checkSqlite3Error(rc)) {
+            free(tbuf.start);
+            sqlite3BtreeCloseCursor(pIndexCursor);
+            sqlite3BtreeCloseCursor(pTableCursor);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+
+        PyObject *py_key   = PyLong_FromLong(key);
+        PyObject *py_value = deserialize(db, py_table->type, &tbuf);
+        free(tbuf.start);
+        if (py_key == NULL || py_value == NULL) {
+            sqlite3BtreeCloseCursor(pIndexCursor);
+            sqlite3BtreeCloseCursor(pTableCursor);
+            Py_XDECREF(py_value);
+            Py_XDECREF(py_key);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+
+        PyObject *py_tuple = PyTuple_Pack(2, py_key, py_value);
+        Py_DECREF(py_value);
+        Py_DECREF(py_key);
+        if (py_tuple == NULL) {
+            sqlite3BtreeCloseCursor(pIndexCursor);
+            sqlite3BtreeCloseCursor(pTableCursor);
+            Py_DECREF(py_tuple);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+
+        if (PyList_Append(py_values, py_tuple) != 0) {
+            Py_DECREF(py_key);
+            Py_DECREF(py_values);
+            return NULL;
+        }
+        Py_DECREF(py_tuple);
+    }
+
+    sqlite3BtreeCloseCursor(pIndexCursor);
+    sqlite3BtreeCloseCursor(pTableCursor);
+
+    return py_values;
+}
+
+static PyObject *
 Trans_cursor(TransObject *self, PyObject *args)
 {
     Py_ssize_t n_args = PyTuple_Size(args);
@@ -1776,6 +1967,26 @@ Trans_cursor(TransObject *self, PyObject *args)
         }
     } else {
         PyErr_SetString(PyExc_TypeError, "function takes 1 or 2 arguments");
+        return NULL;
+    }
+}
+
+static PyObject *
+Trans_indexCursor(TransObject *self, PyObject *args)
+{
+    Py_ssize_t n_args = PyTuple_Size(args);
+    if (n_args == 2) {
+        PyObject *source = PyTuple_GetItem(args,0);
+        PyObject *key    = PyTuple_GetItem(args,1);
+
+        if (PyObject_IsInstance(source, (PyObject *) &daison_IndexType)) {
+            return TableIndex_cursor_at(self->db, (IndexObject *) source, key);
+        } else {
+            PyErr_SetString(PyExc_TypeError, "the first argument must be an index");
+            return NULL;
+        }
+    } else {
+        PyErr_SetString(PyExc_TypeError, "function takes 2 arguments");
         return NULL;
     }
 }
