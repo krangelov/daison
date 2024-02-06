@@ -1075,6 +1075,57 @@ DB_close(DBObject *self, PyObject *Py_UNUSED(ignored))
     Py_RETURN_NONE;
 }
 
+static PyObject *
+DB_getJournalMode(DBObject *self, PyObject *Py_UNUSED(ignored))
+{
+    int eMode = sqlite3BtreeGetJournalMode(self->pBtree);
+    if (eMode == PAGER_JOURNALMODE_DELETE)
+        return PyUnicode_FromString("DELETE");
+    else if (eMode == PAGER_JOURNALMODE_PERSIST)
+        return PyUnicode_FromString("PERSIST");
+    else if (eMode == PAGER_JOURNALMODE_OFF)
+        return PyUnicode_FromString("OFF");
+    else if (eMode == PAGER_JOURNALMODE_TRUNCATE)
+        return PyUnicode_FromString("TRUNCATE");
+    else if (eMode == PAGER_JOURNALMODE_MEMORY)
+        return PyUnicode_FromString("MEMORY");
+    else if (eMode == PAGER_JOURNALMODE_WAL)
+        return PyUnicode_FromString("WAL");
+    else {
+        PyErr_SetString(DBError, "The journal mode must be one of the following - DELETE, PERSIST, OFF, TRUNCATE, MEMORY or WAL");
+        return NULL;
+    }
+}
+
+static PyObject *
+DB_setJournalMode(DBObject *self, PyObject *mode)
+{
+    int eMode;
+    if (PyUnicode_CompareWithASCIIString(mode, "DELETE") == 0)
+        eMode = PAGER_JOURNALMODE_DELETE;
+    else if (PyUnicode_CompareWithASCIIString(mode, "PERSIST") == 0)
+        eMode = PAGER_JOURNALMODE_PERSIST;
+    else if (PyUnicode_CompareWithASCIIString(mode, "OFF") == 0)
+        eMode = PAGER_JOURNALMODE_OFF;
+    else if (PyUnicode_CompareWithASCIIString(mode, "TRUNCATE") == 0)
+        eMode = PAGER_JOURNALMODE_TRUNCATE;
+    else if (PyUnicode_CompareWithASCIIString(mode, "MEMORY") == 0)
+        eMode = PAGER_JOURNALMODE_MEMORY;
+    else if (PyUnicode_CompareWithASCIIString(mode, "WAL") == 0)
+        eMode = PAGER_JOURNALMODE_WAL;
+    else {
+        PyErr_SetString(DBError, "The journal mode must be one of the following - DELETE, PERSIST, OFF, TRUNCATE, MEMORY or WAL");
+        return NULL;
+    }
+
+    int rc = sqlite3BtreeSetJournalMode(self->pBtree, eMode);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static void
 DB_dealloc(DBObject *self)
 {
@@ -1110,6 +1161,10 @@ DB_enter(DBObject *self, PyObject *Py_UNUSED(ignored))
 static PyMethodDef DB_methods[] = {
     {"run",  (void*)DB_run,  METH_VARARGS,
      "Runs a transaction over the database"},
+    {"setJournalMode",  (void*)DB_setJournalMode,  METH_O,
+     "Changes the journal mode"},
+    {"getJournalMode",  (void*)DB_getJournalMode,  METH_NOARGS,
+     "Retrieves the current journal mode"},
     {"close",  (void*)DB_close,  METH_NOARGS,
      "Closes a Daison database"},
     {"__deserialize__", (PyCFunction) DB_deserialize, METH_VARARGS, ""},

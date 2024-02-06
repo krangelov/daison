@@ -16,11 +16,42 @@ sqlite_ABORT_ROLLBACK = (#const SQLITE_ABORT_ROLLBACK) :: CInt
 btreeINTKEY  = (#const BTREE_INTKEY)  :: CInt
 btreeBLOBKEY = (#const BTREE_BLOBKEY) :: CInt
 
+data JournalMode
+  = JournalDelete    -- | Commit by deleting journal file
+  | JournalPersist   -- | Commit by zeroing journal header
+  | JournalOff       -- | Journal omitted
+  | JournalTruncate  -- | Commit by truncating journal
+  | JournalMemory    -- | In-memory journal file
+  | JournalWAL       -- | Use write-ahead logging
+  deriving (Eq,Show)
+
+toCJournalMode :: JournalMode -> CInt
+toCJournalMode JournalDelete   = (#const PAGER_JOURNALMODE_DELETE)
+toCJournalMode JournalPersist  = (#const PAGER_JOURNALMODE_PERSIST)
+toCJournalMode JournalOff      = (#const PAGER_JOURNALMODE_OFF)
+toCJournalMode JournalTruncate = (#const PAGER_JOURNALMODE_TRUNCATE)
+toCJournalMode JournalMemory   = (#const PAGER_JOURNALMODE_MEMORY)
+toCJournalMode JournalWAL      = (#const PAGER_JOURNALMODE_WAL)
+
+fromCJournalMode :: CInt -> JournalMode
+fromCJournalMode (#const PAGER_JOURNALMODE_DELETE) = JournalDelete
+fromCJournalMode (#const PAGER_JOURNALMODE_PERSIST) = JournalPersist
+fromCJournalMode (#const PAGER_JOURNALMODE_OFF) = JournalOff
+fromCJournalMode (#const PAGER_JOURNALMODE_TRUNCATE) = JournalTruncate
+fromCJournalMode (#const PAGER_JOURNALMODE_MEMORY) = JournalMemory
+fromCJournalMode (#const PAGER_JOURNALMODE_WAL) = JournalWAL
+
 foreign import ccall "sqlite3Btree.h sqlite3BtreeOpen"
   sqlite3BtreeOpen :: CString -> CString -> Ptr (Ptr Btree) -> CInt -> CInt -> IO CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeClose"
   sqlite3BtreeClose :: Ptr Btree -> IO CInt
+
+foreign import ccall "sqlite3Btree.h sqlite3BtreeGetJournalMode"
+  sqlite3BtreeGetJournalMode :: Ptr Btree -> IO CInt
+
+foreign import ccall "sqlite3Btree.h sqlite3BtreeSetJournalMode"
+  sqlite3BtreeSetJournalMode :: Ptr Btree -> CInt -> IO CInt
 
 foreign import ccall "sqlite3Btree.h sqlite3BtreeCursor"
   sqlite3BtreeCursor :: Ptr Btree -> CInt -> CInt -> CInt -> CInt -> Ptr (Ptr BtCursor) -> IO CInt

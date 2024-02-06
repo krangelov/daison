@@ -2576,17 +2576,6 @@ typedef struct PgHdr DbPage;
 #define PAGER_LOCKINGMODE_EXCLUSIVE   1
 
 /*
-** Numeric constants that encode the journalmode.  
-*/
-#define PAGER_JOURNALMODE_QUERY     (-1)  /* Query the value of journalmode */
-#define PAGER_JOURNALMODE_DELETE      0   /* Commit by deleting journal file */
-#define PAGER_JOURNALMODE_PERSIST     1   /* Commit by zeroing journal header */
-#define PAGER_JOURNALMODE_OFF         2   /* Journal omitted.  */
-#define PAGER_JOURNALMODE_TRUNCATE    3   /* Commit by truncating journal */
-#define PAGER_JOURNALMODE_MEMORY      4   /* In-memory journal file */
-#define PAGER_JOURNALMODE_WAL         5   /* Use write-ahead logging */
-
-/*
 ** Flags that make up the mask passed to sqlite3PagerAcquire().
 */
 #define PAGER_GET_NOCONTENT     0x01  /* Do not load data from disk */
@@ -2633,13 +2622,11 @@ SQLITE_PRIVATE int sqlite3PagerMaxPageCount(Pager*, int);
 SQLITE_PRIVATE void sqlite3PagerSetCachesize(Pager*, int);
 SQLITE_PRIVATE void sqlite3PagerSetMmapLimit(Pager *, sqlite3_int64);
 SQLITE_PRIVATE void sqlite3PagerSetFlags(Pager*,unsigned);
-#if 0
 SQLITE_PRIVATE int sqlite3PagerLockingMode(Pager *, int);
 SQLITE_PRIVATE int sqlite3PagerSetJournalMode(Pager *, int);
 SQLITE_PRIVATE int sqlite3PagerGetJournalMode(Pager*);
 SQLITE_PRIVATE int sqlite3PagerOkToChangeJournalMode(Pager*);
 SQLITE_PRIVATE i64 sqlite3PagerJournalSizeLimit(Pager *, i64);
-#endif
 
 /* Functions used to obtain and release page references. */ 
 SQLITE_PRIVATE int sqlite3PagerAcquire(Pager *pPager, Pgno pgno, DbPage **ppPage, int clrFlag);
@@ -2672,13 +2659,9 @@ SQLITE_PRIVATE int sqlite3PagerSharedLock(Pager *pPager);
 #ifndef SQLITE_OMIT_WAL
 SQLITE_PRIVATE   int sqlite3PagerCheckpoint(Pager *pPager, int, int*, int*);
 SQLITE_PRIVATE   int sqlite3PagerWalSupported(Pager *pPager);
-#if 0
 SQLITE_PRIVATE   int sqlite3PagerWalCallback(Pager *pPager);
-#endif
 SQLITE_PRIVATE   int sqlite3PagerOpenWal(Pager *pPager, int *pisOpen);
-#if 0
 SQLITE_PRIVATE   int sqlite3PagerCloseWal(Pager *pPager);
-#endif
 #endif
 
 #ifdef SQLITE_ENABLE_ZIPVFS
@@ -24616,9 +24599,7 @@ SQLITE_PRIVATE void sqlite3PcacheStats(
 
 #ifdef SQLITE_OMIT_WAL
 # define sqlite3WalOpen(x,y,z)                   0
-#if 0
 # define sqlite3WalLimit(x,y)
-#endif
 # define sqlite3WalClose(w,x,y,z)                0
 # define sqlite3WalBeginReadTransaction(y,z)     0
 # define sqlite3WalEndReadTransaction(z)
@@ -24630,13 +24611,9 @@ SQLITE_PRIVATE void sqlite3PcacheStats(
 # define sqlite3WalSavepointUndo(y,z)            0
 # define sqlite3WalFrames(u,v,w,x,y,z)           0
 # define sqlite3WalCheckpoint(r,s,t,u,v,w,x,y,z) 0
-#if 0
 # define sqlite3WalCallback(z)                   0
-#endif
 # define sqlite3WalExclusiveMode(y,z)            0
-#if 0
 # define sqlite3WalHeapMemory(z)                 0
-#endif
 # define sqlite3WalFramesize(z)                  0
 # define sqlite3WalFindFrame(x,y,z)              0
 #else
@@ -24652,10 +24629,8 @@ typedef struct Wal Wal;
 SQLITE_PRIVATE int sqlite3WalOpen(sqlite3_vfs*, sqlite3_file*, const char *, int, i64, Wal**);
 SQLITE_PRIVATE int sqlite3WalClose(Wal *pWal, int sync_flags, int, u8 *);
 
-#if 0
 /* Set the limiting size of a WAL file. */
 SQLITE_PRIVATE void sqlite3WalLimit(Wal*, i64);
-#endif
 
 /* Used by readers to open (lock) and close (unlock) a snapshot.  A 
 ** snapshot is like a read-transaction.  It is the state of the database
@@ -24705,27 +24680,23 @@ SQLITE_PRIVATE int sqlite3WalCheckpoint(
   int *pnCkpt                     /* OUT: Number of backfilled frames in WAL */
 );
 
-#if 0
 /* Return the value to pass to a sqlite3_wal_hook callback, the
 ** number of frames in the WAL at the point of the last commit since
 ** sqlite3WalCallback() was called.  If no commits have occurred since
 ** the last call, then return 0.
 */
 SQLITE_PRIVATE int sqlite3WalCallback(Wal *pWal);
-#endif
 
 /* Tell the wal layer that an EXCLUSIVE lock has been obtained (or released)
 ** by the pager layer on the database file.
 */
 SQLITE_PRIVATE int sqlite3WalExclusiveMode(Wal *pWal, int op);
 
-#if 0
 /* Return true if the argument is non-NULL and the WAL module is using
 ** heap-memory for the wal-index. Otherwise, if the argument is NULL or the
 ** WAL module is using shared-memory, return false. 
 */
 SQLITE_PRIVATE int sqlite3WalHeapMemory(Wal *pWal);
-#endif
 
 #ifdef SQLITE_ENABLE_ZIPVFS
 /* If the WAL file is not empty, return the number of bytes of content
@@ -31514,7 +31485,6 @@ SQLITE_PRIVATE void *sqlite3PagerGetExtra(DbPage *pPg){
   return pPg->pExtra;
 }
 
-#if 0
 /*
 ** Get/set the locking-mode for this pager. Parameter eMode must be one
 ** of PAGER_LOCKINGMODE_QUERY, PAGER_LOCKINGMODE_NORMAL or 
@@ -31675,7 +31645,6 @@ SQLITE_PRIVATE i64 sqlite3PagerJournalSizeLimit(Pager *pPager, i64 iLimit){
   }
   return pPager->journalSizeLimit;
 }
-#endif
 
 #ifndef SQLITE_OMIT_VACUUM
 #if 0
@@ -31709,11 +31678,9 @@ SQLITE_PRIVATE int sqlite3PagerCheckpoint(Pager *pPager, int eMode, int *pnLog, 
   return rc;
 }
 
-#if 0
 SQLITE_PRIVATE int sqlite3PagerWalCallback(Pager *pPager){
   return sqlite3WalCallback(pPager->pWal);
 }
-#endif
 
 /*
 ** Return true if the underlying VFS for the given pager supports the
@@ -31832,7 +31799,6 @@ SQLITE_PRIVATE int sqlite3PagerOpenWal(
 ** error (SQLITE_BUSY) is returned and the log connection is not closed.
 ** If successful, the EXCLUSIVE lock is not released before returning.
 */
-#if 0
 SQLITE_PRIVATE int sqlite3PagerCloseWal(Pager *pPager){
   int rc = SQLITE_OK;
 
@@ -31869,7 +31835,6 @@ SQLITE_PRIVATE int sqlite3PagerCloseWal(Pager *pPager){
   }
   return rc;
 }
-#endif
 #endif /* !SQLITE_OMIT_WAL */
 
 #ifdef SQLITE_ENABLE_ZIPVFS
@@ -33212,14 +33177,12 @@ SQLITE_PRIVATE int sqlite3WalOpen(
   return rc;
 }
 
-#if 0
 /*
 ** Change the size to which the WAL file is trucated on each reset.
 */
 SQLITE_PRIVATE void sqlite3WalLimit(Wal *pWal, i64 iLimit){
   if( pWal ) pWal->mxWalSize = iLimit;
 }
-#endif
 
 /*
 ** Find the smallest page number out of all pages held in the WAL that
@@ -34973,7 +34936,6 @@ SQLITE_PRIVATE int sqlite3WalCheckpoint(
   return (rc==SQLITE_OK && eMode!=eMode2 ? SQLITE_BUSY : rc);
 }
 
-#if 0
 /* Return the value to pass to a sqlite3_wal_hook callback, the
 ** number of frames in the WAL at the point of the last commit since
 ** sqlite3WalCallback() was called.  If no commits have occurred since
@@ -34987,7 +34949,6 @@ SQLITE_PRIVATE int sqlite3WalCallback(Wal *pWal){
   }
   return (int)ret;
 }
-#endif
 
 /*
 ** This function is called to change the WAL subsystem into or out
@@ -35050,7 +35011,6 @@ SQLITE_PRIVATE int sqlite3WalExclusiveMode(Wal *pWal, int op){
   return rc;
 }
 
-#if 0
 /* 
 ** Return true if the argument is non-NULL and the WAL module is using
 ** heap-memory for the wal-index. Otherwise, if the argument is NULL or the
@@ -35059,7 +35019,6 @@ SQLITE_PRIVATE int sqlite3WalExclusiveMode(Wal *pWal, int op){
 SQLITE_PRIVATE int sqlite3WalHeapMemory(Wal *pWal){
   return (pWal && pWal->exclusiveMode==WAL_HEAPMEMORY_MODE );
 }
-#endif
 
 #ifdef SQLITE_ENABLE_ZIPVFS
 /*
@@ -37418,7 +37377,6 @@ SQLITE_API int SQLITE_STDCALL sqlite3BtreeOpen(
   */
   vfsFlags &=  ~( SQLITE_OPEN_DELETEONCLOSE |
                   SQLITE_OPEN_EXCLUSIVE |
-                  SQLITE_OPEN_MAIN_DB |
                   SQLITE_OPEN_TEMP_DB | 
                   SQLITE_OPEN_TRANSIENT_DB | 
                   SQLITE_OPEN_MAIN_JOURNAL | 
@@ -45064,6 +45022,121 @@ SQLITE_API int SQLITE_STDCALL sqlite3BtreeIsInBackup(Btree *p){
 }
 
 /*
+** Set both the "read version" (single byte at byte offset 18) and
+** "write version" (single byte at byte offset 19) fields in the database
+** header to iVersion.
+*/
+SQLITE_PRIVATE int SQLITE_STDCALL sqlite3BtreeSetVersion(Btree *pBtree, int iVersion){
+  BtShared *pBt = pBtree->pBt;
+  int rc;                         /* Return code */
+
+  assert( iVersion==1 || iVersion==2 );
+
+  /* If setting the version fields to 1, do not automatically open the
+  ** WAL connection, even if the version fields are currently set to 2.
+  */
+  pBt->btsFlags &= ~BTS_NO_WAL;
+  if( iVersion==1 ) pBt->btsFlags |= BTS_NO_WAL;
+
+  rc = sqlite3BtreeBeginTrans(pBtree, 0);
+  if( rc==SQLITE_OK ){
+    u8 *aData = pBt->pPage1->aData;
+    if( aData[18]!=(u8)iVersion || aData[19]!=(u8)iVersion ){
+      rc = sqlite3BtreeBeginTrans(pBtree, 2);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3PagerWrite(pBt->pPage1->pDbPage);
+        if( rc==SQLITE_OK ){
+          aData[18] = (u8)iVersion;
+          aData[19] = (u8)iVersion;
+        }
+      }
+    }
+  }
+  if( rc==SQLITE_OK ){
+      sqlite3BtreeCommit(pBtree);
+  }
+
+  pBt->btsFlags &= ~BTS_NO_WAL;
+  return rc;
+}
+
+SQLITE_API int SQLITE_STDCALL sqlite3BtreeSetJournalMode(Btree *pBt, int eNew){
+  int rc = SQLITE_OK;
+  Pager *pPager;                  /* Pager associated with pBt */
+  int eOld;                       /* The old journal mode */
+#ifndef SQLITE_OMIT_WAL
+  const char *zFilename;          /* Name of database file for pPager */
+#endif
+
+  assert( eNew==PAGER_JOURNALMODE_DELETE
+       || eNew==PAGER_JOURNALMODE_TRUNCATE
+       || eNew==PAGER_JOURNALMODE_PERSIST
+       || eNew==PAGER_JOURNALMODE_OFF
+       || eNew==PAGER_JOURNALMODE_MEMORY
+       || eNew==PAGER_JOURNALMODE_WAL
+       || eNew==PAGER_JOURNALMODE_QUERY
+  );
+
+  pPager = sqlite3BtreePager(pBt);
+  eOld = sqlite3PagerGetJournalMode(pPager);
+  if( eNew==PAGER_JOURNALMODE_QUERY ) eNew = eOld;
+  assert( sqlite3BtreeHoldsMutex(pBt) );
+  if( !sqlite3PagerOkToChangeJournalMode(pPager) ) eNew = eOld;
+
+#ifndef SQLITE_OMIT_WAL
+  zFilename = sqlite3PagerFilename(pPager, 1);
+
+  /* Do not allow a transition to journal_mode=WAL for a database
+  ** in temporary storage or if the VFS does not support shared memory
+  */
+  if( eNew==PAGER_JOURNALMODE_WAL
+   && (sqlite3Strlen30(zFilename)==0           /* Temp file */
+       || !sqlite3PagerWalSupported(pPager))   /* No shared-memory support */
+  ){
+    eNew = eOld;
+  }
+
+  if( (eNew!=eOld)
+   && (eOld==PAGER_JOURNALMODE_WAL || eNew==PAGER_JOURNALMODE_WAL)
+  ){
+      if( eOld==PAGER_JOURNALMODE_WAL ){
+        /* If leaving WAL mode, close the log file. If successful, the call
+        ** to PagerCloseWal() checkpoints and deletes the write-ahead-log
+        ** file. An EXCLUSIVE lock may still be held on the database file
+        ** after a successful return.
+        */
+        rc = sqlite3PagerCloseWal(pPager);
+        if( rc==SQLITE_OK ){
+          sqlite3PagerSetJournalMode(pPager, eNew);
+        }
+      }else if( eOld==PAGER_JOURNALMODE_MEMORY ){
+        /* Cannot transition directly from MEMORY to WAL.  Use mode OFF
+        ** as an intermediate */
+        sqlite3PagerSetJournalMode(pPager, PAGER_JOURNALMODE_OFF);
+      }
+
+      /* Open a transaction on the database file. Regardless of the journal
+      ** mode, this transaction always uses a rollback journal.
+      */
+      assert( sqlite3BtreeTxnState(pBt)!=SQLITE_TXN_WRITE );
+      if( rc==SQLITE_OK ){
+        rc = sqlite3BtreeSetVersion(pBt, (eNew==PAGER_JOURNALMODE_WAL ? 2 : 1));
+      }
+  }
+#endif /* ifndef SQLITE_OMIT_WAL */
+
+  if( rc ) eNew = eOld;
+  eNew = sqlite3PagerSetJournalMode(pPager, eNew);
+
+  return rc;
+}
+
+SQLITE_API int SQLITE_STDCALL sqlite3BtreeGetJournalMode(Btree *pBt){
+    Pager* pager = sqlite3BtreePager(pBt);
+    return sqlite3PagerGetJournalMode(pager);
+}
+
+/*
 ** This function returns a pointer to a blob of memory associated with
 ** a single shared-btree. The memory is used by client code for its own
 ** purposes (for example, to store a high-level schema associated with 
@@ -45199,42 +45272,6 @@ SQLITE_API void SQLITE_STDCALL sqlite3BtreeIncrblobCursor(BtCursor *pCur){
   pCur->pBtree->hasIncrblobCur = 1;
 }
 #endif
-
-/*
-** Set both the "read version" (single byte at byte offset 18) and 
-** "write version" (single byte at byte offset 19) fields in the database
-** header to iVersion.
-*/
-SQLITE_API int SQLITE_STDCALL sqlite3BtreeSetVersion(Btree *pBtree, int iVersion){
-  BtShared *pBt = pBtree->pBt;
-  int rc;                         /* Return code */
- 
-  assert( iVersion==1 || iVersion==2 );
-
-  /* If setting the version fields to 1, do not automatically open the
-  ** WAL connection, even if the version fields are currently set to 2.
-  */
-  pBt->btsFlags &= ~BTS_NO_WAL;
-  if( iVersion==1 ) pBt->btsFlags |= BTS_NO_WAL;
-
-  rc = sqlite3BtreeBeginTrans(pBtree, 0);
-  if( rc==SQLITE_OK ){
-    u8 *aData = pBt->pPage1->aData;
-    if( aData[18]!=(u8)iVersion || aData[19]!=(u8)iVersion ){
-      rc = sqlite3BtreeBeginTrans(pBtree, 2);
-      if( rc==SQLITE_OK ){
-        rc = sqlite3PagerWrite(pBt->pPage1->pDbPage);
-        if( rc==SQLITE_OK ){
-          aData[18] = (u8)iVersion;
-          aData[19] = (u8)iVersion;
-        }
-      }
-    }
-  }
-
-  pBt->btsFlags &= ~BTS_NO_WAL;
-  return rc;
-}
 
 /*
 ** set the mask of hint flags for cursor pCsr.

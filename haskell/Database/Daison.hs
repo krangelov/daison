@@ -1,6 +1,7 @@
 {-# LANGUAGE TypeFamilies, MultiParamTypeClasses, BangPatterns, CPP #-}
 module Database.Daison
             ( Database, openDB, closeDB
+            , JournalMode(..), setJournalMode, getJournalMode
 
             , runDaison, AccessMode(..), Daison
 
@@ -131,6 +132,13 @@ closeDB :: Database -> IO ()
 closeDB (Database pBtree _) = do
   checkSqlite3Error $ sqlite3BtreeClose pBtree
 
+setJournalMode :: Database -> JournalMode -> IO ()
+setJournalMode (Database pBtree _) mode =
+  checkSqlite3Error $ sqlite3BtreeSetJournalMode pBtree (toCJournalMode mode)
+
+getJournalMode :: Database -> IO JournalMode
+getJournalMode (Database pBtree _) =
+  fmap fromCJournalMode (sqlite3BtreeGetJournalMode pBtree)
 
 -----------------------------------------------------------------
 -- The monad

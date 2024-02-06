@@ -387,6 +387,17 @@ int sqlite3BtreeOpen(
 #define SQLITE_OPEN_PRIVATECACHE     0x00040000  /* Ok for sqlite3_open_v2() */
 #define SQLITE_OPEN_WAL              0x00080000  /* VFS only */
 
+/*
+** Numeric constants that encode the journalmode.  
+*/
+#define PAGER_JOURNALMODE_QUERY     (-1)  /* Query the value of journalmode */
+#define PAGER_JOURNALMODE_DELETE      0   /* Commit by deleting journal file */
+#define PAGER_JOURNALMODE_PERSIST     1   /* Commit by zeroing journal header */
+#define PAGER_JOURNALMODE_OFF         2   /* Journal omitted.  */
+#define PAGER_JOURNALMODE_TRUNCATE    3   /* Commit by truncating journal */
+#define PAGER_JOURNALMODE_MEMORY      4   /* In-memory journal file */
+#define PAGER_JOURNALMODE_WAL         5   /* Use write-ahead logging */
+
 int sqlite3BtreeClose(Btree*);
 int sqlite3BtreeSetCacheSize(Btree*,int);
 #if SQLITE_MAX_MMAP_SIZE>0
@@ -413,6 +424,8 @@ int sqlite3BtreeCreateTable(Btree*, int*, int flags);
 int sqlite3BtreeIsInTrans(Btree*);
 int sqlite3BtreeIsInReadTrans(Btree*);
 int sqlite3BtreeIsInBackup(Btree*);
+int sqlite3BtreeSetJournalMode(Btree *pBt, int eNew);
+int sqlite3BtreeGetJournalMode(Btree *pBt);
 void *sqlite3BtreeSchema(Btree *, int, void(*)(void *));
 int sqlite3BtreeSchemaLocked(Btree *pBtree);
 int sqlite3BtreeLockTable(Btree *pBtree, int iTab, u8 isWriteLock);
@@ -587,7 +600,6 @@ struct Pager *sqlite3BtreePager(Btree*);
 int sqlite3BtreePutData(BtCursor*, u32 offset, u32 amt, void*);
 void sqlite3BtreeIncrblobCursor(BtCursor *);
 void sqlite3BtreeClearCursor(BtCursor *);
-int sqlite3BtreeSetVersion(Btree *pBt, int iVersion);
 void sqlite3BtreeCursorHints(BtCursor *, unsigned int mask);
 #ifdef SQLITE_DEBUG
 int sqlite3BtreeCursorHasHint(BtCursor*, unsigned int mask);
