@@ -1618,18 +1618,20 @@ Index_cursor_everything(DBObject *db, IndexObject *index)
         }
 
         buffer buf;
-        buf.start = (uint8_t*) alloca(payloadSize);
+        buf.start = (uint8_t*) malloc(payloadSize);
         buf.p     = buf.start;
         buf.end   = buf.start+payloadSize;
 
         rc = sqlite3BtreeKey(pCursor, 0, payloadSize, buf.start);
         if (!checkSqlite3Error(rc)) {
+            free(buf.start);
             Py_DECREF(list);
             list = NULL;
         }
 
         PyObject *value = deserialize(db, index->type, &buf);
         if (value == NULL) {
+            free(buf.start);
             Py_DECREF(list);
             list = NULL;
             break;
@@ -1637,11 +1639,14 @@ Index_cursor_everything(DBObject *db, IndexObject *index)
 
         PyObject *keys  = deserializeIds(&buf);
         if (keys == NULL) {
+            free(buf.start);
             Py_DECREF(value);
             Py_DECREF(list);
             list = NULL;
             break;
         }
+
+        free(buf.start);
 
         PyObject *pair = PyTuple_New(2);
         if (pair == NULL) {

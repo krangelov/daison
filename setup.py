@@ -9,7 +9,7 @@ daison_module = Extension(
 
 setup(
     name = 'daison',
-    version = '0.3',
+    version = '0.4',
     description = 'An interface to Daison databases from Python',
     author='Krasimir Angelov',
     author_email='kr.angelov@gmail.com',
