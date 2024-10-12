@@ -197,7 +197,7 @@ getVInt (Tag tag bits name) = do
 getRest :: Int -> Integer -> Get Integer
 getRest bits n = do
   w <- getWord8
-  let n' = n .|. (fromIntegral (w .&. 0xFE) `shiftL` (bits-1))
+  let n' = n .|. (fromIntegral (w `shiftR` 1) `shiftL` bits)
   if w .&. 1 == 0
     then if w .&. 0x80 /= 0
            then return (n' .|. ((-128) `shiftL` bits))
