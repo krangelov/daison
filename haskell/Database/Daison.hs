@@ -171,7 +171,6 @@ instance Monad Daison where
 #if !MIN_VERSION_base(4,13,0)
   fail msg = Daison (\db -> Fail.fail msg)
 #endif
-  return x = Daison (\db -> return x)
   f >>= g  = Daison (\db -> doTransaction f db >>= \x -> doTransaction (g x) db)
 
 instance MonadFail Daison where
@@ -520,7 +519,6 @@ instance Monad Query where
 #if !MIN_VERSION_base(4,13,0)
   fail _    = mzero
 #endif
-  return x  = Query (\pBtree schema  -> return (Output x nilQSeq done))
   f >>= g   = Query (\pBtree schema  -> doQuery f pBtree schema  >>= loop pBtree schema)
     where
       loop pBtree schema Done                = return Done

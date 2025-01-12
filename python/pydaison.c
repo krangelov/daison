@@ -933,6 +933,7 @@ Trans_exit(TransObject *self, PyObject *const *args, Py_ssize_t nargs)
     PyObject *exc_tb = Py_None;
 
     if (nargs < 0 || nargs > 3) {
+        PyErr_Format(PyExc_TypeError, "%d arguments provided, 3 expected", nargs);
         return NULL;
     }
     if (nargs < 1) {
@@ -978,7 +979,7 @@ Trans_store(TransObject *self, PyObject *args);
 
 static PyMethodDef Transaction_methods[] = {
     {"__enter__", (PyCFunction) Trans_enter, METH_NOARGS, ""},
-    {"__exit__", (PyCFunction) Trans_exit, METH_VARARGS, ""},
+    {"__exit__", (PyCFunction) Trans_exit, METH_FASTCALL, ""},
     {"cursor",  (void*)Trans_cursor,  METH_VARARGS,
      "Returns an iterator over a table or an index"},
     {"indexCursor",  (void*)Trans_indexCursor,  METH_VARARGS,
