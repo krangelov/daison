@@ -1569,7 +1569,98 @@ daison_maybeIndex(PyObject *self, PyObject *args, PyObject *kwds)
 static PyObject *
 Table_cursor_everything(DBObject *db, TableObject *table)
 {
-    return NULL;
+    int rc;
+
+    PyObject *py_info = PyDict_GetItem(db->schema, table->name);
+    if (PyErr_Occurred())
+        return NULL;
+
+    if (py_info == NULL) {
+        PyErr_Format(DBError, "Table %U does not exist", table->name);
+        return NULL;
+    }
+
+    PyObject *py_tnum = PyTuple_GetItem(py_info, 1);
+    if (py_tnum == NULL)
+        return NULL;
+    int tnum = PyLong_AsLong(py_tnum);
+
+    rc = sqlite3BtreeLockTable(db->pBtree, tnum, 0);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    BtCursor *pCursor = NULL;
+    rc = sqlite3BtreeCursor(db->pBtree, tnum, 0, 0, 0, &pCursor);
+    if (!checkSqlite3Error(rc)) {
+        return NULL;
+    }
+
+    int res;
+    rc = sqlite3BtreeFirst(pCursor, &res);
+    if (!checkSqlite3Error(rc)) {
+        sqlite3BtreeCloseCursor(pCursor);
+        return NULL;
+    }
+
+    PyObject *list = PyList_New(0);
+    while (res == 0) {
+        i64 id;
+        rc = sqlite3BtreeKeySize(pCursor, &id);
+        if (!checkSqlite3Error(rc)) {
+            Py_DECREF(list);
+            list = NULL;
+        }
+
+        u32 payloadSize;
+        rc = sqlite3BtreeDataSize(pCursor, &payloadSize);
+        if (!checkSqlite3Error(rc)) {
+            Py_DECREF(list);
+            list = NULL;
+            break;
+        }
+
+        buffer buf;
+        buf.start = malloc(payloadSize);
+        buf.p     = buf.start;
+        buf.end   = buf.start+payloadSize;
+
+        rc = sqlite3BtreeData(pCursor, 0, payloadSize, buf.start);
+        if (!checkSqlite3Error(rc)) {
+            free(buf.start);
+            Py_DECREF(list);
+            list = NULL;
+        }
+
+        PyObject *py_value =
+            deserialize(db, table->type, &buf);
+
+        free(buf.start);
+
+        PyObject *pair = PyTuple_New(2);
+        if (pair == NULL) {
+            Py_DECREF(py_value);
+            Py_DECREF(list);
+            list = NULL;
+            break;
+        }
+        PyTuple_SetItem(pair, 0, PyLong_FromLong(id));
+        PyTuple_SetItem(pair, 1, py_value);
+
+        PyList_Append(list, pair);
+        Py_DECREF(pair);
+
+        rc = sqlite3BtreeNext(pCursor, &res);
+        if (!checkSqlite3Error(rc)) {
+            Py_DECREF(list);
+            list = NULL;
+            break;
+        }
+    }
+
+    sqlite3BtreeCloseCursor(pCursor);
+
+    return list;
 }
 
 static PyObject *
