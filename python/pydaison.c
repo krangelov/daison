@@ -174,6 +174,16 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf);
 static int
 serializeObject(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
 {
+    if (PyObject_HasAttrString(obj, "__serialize__")) {
+        PyObject *py_capsule = PyCapsule_New(buf, "daison-buffer", NULL);
+        if (py_capsule == NULL)
+            return 0;
+        PyObject *res = PyObject_CallMethod(obj, "__serialize__", "OO", py_db, py_capsule);
+        Py_XDECREF(res);
+        Py_DECREF(py_capsule);
+        return 1;
+    }
+
     PyObject *init = PyObject_GetAttrString(type, "__init__");
     if (init == NULL)
         return 0;
@@ -242,6 +252,14 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
             return 0;
 
         return 1;
+    } else if (obj == Py_False) {
+        if (!putVInt(0b011, 3, 1, buf))
+            return 0;
+        return putTag(0b00111, buf);
+    } else if (obj == Py_True) {
+        if (!putVInt(0b011, 3, 2, buf))
+            return 0;
+        return putTag(0b00111, buf);
     } else if (PyObject_IsInstance(type, py_db->enumMeta)) {
         PyObject *members = PyObject_GetAttrString(type, "__members__");
         if (members == NULL)
@@ -382,12 +400,23 @@ serialize(DBObject *py_db, PyObject *type, PyObject *obj, buffer *buf)
 
         return 0;
     } else {
-        if (type != (PyObject*) Py_TYPE(obj)) {
+        if (!PyObject_IsInstance(obj, type)) {
             PyErr_SetString(PyExc_TypeError, "Classes does not match");
             return 0;
         }
 
-        if (!putVInt(0b011, 3, 1, buf))
+        Py_ssize_t index = 1;
+        if (PyObject_HasAttrString(type, "__get_index__")) {
+            PyObject *res = PyObject_CallMethod(type, "__get_index__", "O", Py_TYPE(obj));
+            if (res) {
+                index = PyLong_AsSsize_t(res);
+                Py_DECREF(res);
+                if (PyErr_Occurred())
+                    return 0;
+            }
+        }
+
+        if (!putVInt(0b011, 3, index, buf))
             return 0;
 
         if (!serializeObject(py_db, type, obj, buf))
@@ -572,6 +601,24 @@ deserialize(DBObject *py_db, PyObject *type, buffer *buf)
             return NULL;
 
         res = PyFloat_FromDouble(f);
+    } else if (type == (PyObject*) &PyBool_Type) {
+        uint64_t index = getVInt(0b011, 3, "a constructor", buf);
+        if (PyErr_Occurred())
+            return NULL;
+        if (index == 1) {
+            res = Py_False;
+            Py_INCREF(res);
+        } else if (index == 2) {
+            res = Py_True;
+            Py_INCREF(res);
+        } else {
+            return NULL;
+        }
+        getTag(0b00111, 5, "an args-end", buf);
+        if (PyErr_Occurred()) {
+            Py_DECREF(res);
+            return NULL;
+        }
     } else if (PyObject_IsInstance(type, py_db->enumMeta)) {
         uint64_t index = getVInt(0b011, 3, "a constructor", buf);
         if (PyErr_Occurred())
@@ -1152,6 +1199,21 @@ DB_deserialize(DBObject *self, PyObject *args)
     return deserialize(self, py_type, buf);
 }
 
+static PyObject *
+DB_serialize(DBObject *self, PyObject *args)
+{
+    PyObject *py_type, *py_obj, *py_capsule;
+    if (!PyArg_ParseTuple(args, "O!OO", &PyType_Type, &py_type, &py_obj, &py_capsule))
+        return NULL;
+
+    buffer *buf = PyCapsule_GetPointer(py_capsule, "daison-buffer");
+    if (buf == NULL)
+        return NULL;
+
+    serialize(self, py_type, py_obj, buf);
+    Py_RETURN_NONE;
+}
+
 static DBObject *
 DB_enter(DBObject *self, PyObject *Py_UNUSED(ignored))
 {
@@ -1168,6 +1230,7 @@ static PyMethodDef DB_methods[] = {
      "Retrieves the current journal mode"},
     {"close",  (void*)DB_close,  METH_NOARGS,
      "Closes a Daison database"},
+    {"__serialize__", (PyCFunction) DB_serialize, METH_VARARGS, ""},
     {"__deserialize__", (PyCFunction) DB_deserialize, METH_VARARGS, ""},
     {"__enter__", (PyCFunction) DB_enter, METH_NOARGS, ""},
     {"__exit__", (PyCFunction) DB_close, METH_VARARGS, ""},
