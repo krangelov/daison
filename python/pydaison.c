@@ -2164,7 +2164,7 @@ TableIndex_cursor_at(DBObject *db, IndexObject *index, PyObject *key)
         }
 
         if (PyList_Append(py_values, py_tuple) != 0) {
-            Py_DECREF(py_key);
+            Py_DECREF(py_tuple);
             Py_DECREF(py_values);
             return NULL;
         }
