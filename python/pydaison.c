@@ -944,6 +944,7 @@ daison_fetchSchema(DBObject *py_db)
         return 0;
     }
 
+    py_db->cookie = cookie;
     return 1;
 }
 
